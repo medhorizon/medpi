@@ -2,7 +2,7 @@
 
 MedPi 是一个基于 Pi `0.84.1` 和可编辑 pi-web `v0.8.6` 的本地科研工作区。本指南面向第一次运行 MedPi 的研究者、开发者和评审者，覆盖安装、模型配置、项目信任、会话使用以及当前科研工具。
 
-> **当前状态：development baseline。** 本版本适合 loopback、单用户、trusted project 的本地开发和研究验证，不是公开生产服务。Project trust 不是 OS/container sandbox；Python/R kernel、notebook、MCP sidecar、Research Graph/GEPA、subagent scheduler 和重型 scientific viewer 当前未启用。
+> **当前状态：development baseline。** 本版本适合 loopback、单用户、trusted project 的本地开发和研究验证，不是公开生产服务。Project trust 不是 OS/container sandbox。可用 `science_run` / `science_rollback` 做带审计的项目内命令执行（默认无沙箱，Linux 可选 bwrap）；R kernel、notebook UI、MCP sidecar、Research Graph/GEPA、subagent scheduler 和重型 scientific viewer 当前未启用。
 
 ## 1. 你可以用 MedPi 做什么
 
@@ -14,7 +14,8 @@ MedPi 是一个基于 Pi `0.84.1` 和可编辑 pi-web `v0.8.6` 的本地科研�
 - 对常见科学文件做有界格式识别和预览；
 - 用 branch-local Stage 记录研究阶段，并在 gated stage 完成前请求人工批准；
 - 用轻量 provenance DAG 记录 source、run、artifact、claim 及 supports/refutes review finding；
-- 使用 `science-review` prompt 检查 citation mismatch、untraceable number 和 figure/stat mismatch。
+- 使用 `science-review` prompt 检查 citation mismatch、untraceable number 和 figure/stat mismatch；
+- 用 `science_run` 在项目内执行命令（默认 host/`none` 沙箱，可选 Linux `bwrap`），并留下 provenance 与 `.medpi/runs/` 日志；用 `science_rollback` 回到运行前 git 存档点。
 
 当前没有专用科研结果面板。科研 tool 的文本和 `details` 会通过普通 Pi tool-result UI 展示。
 
@@ -24,7 +25,7 @@ MedPi 是一个基于 Pi `0.84.1` 和可编辑 pi-web `v0.8.6` 的本地科研�
 |---|---|
 | Node.js | `>=22.19.0`；当前验证环境为 `v22.20.0` |
 | npm | 当前 lockfile 使用 npm `10.9.3` |
-| Git | 仅在使用 Git worktree 功能时需要 |
+| Git | `science_run` 默认 checkpoint / `science_rollback` 需要项目已是 git 仓库；Git worktree 功能也需要 |
 | 浏览器 | 支持现代 EventSource/SSE、文件选择和基础 Web APIs 的浏览器 |
 | 模型凭据 | 至少配置一个可用的 API-key、OAuth 或本地 OpenAI-compatible provider |
 
@@ -754,12 +755,11 @@ npm run audit
 
 ## 15. 当前不建议做的事情
 
-在完成 sandbox、permission owner、资源配额、abort/cleanup、审计和回滚前，不要：
-
 - 直接把 `dev:lan` 暴露到公网；
 - 让任意用户配置任意 Provider URL；
 - 把整个 home 或根文件系统加入项目访问范围；
 - 安装未经审阅的 plugin/skill；
 - 把外部 source text 当作操作指令；
-- 重新引入 Python/R kernel、notebook、MCP、Research Graph 或 subagent scheduler；
+- 绕过 `science_run` 新增未审计的代码执行入口，或复制旧 MedHorizon kernel/notebook 目录；
+- 重新引入 R kernel、notebook UI、MCP、Research Graph 或 subagent scheduler；
 - 为了功能数量复制第二套 session、tool、permission、artifact 或 provenance runtime。

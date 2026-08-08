@@ -109,11 +109,11 @@ apps/web (editable pi-web source)
 
 ## 4. 精确迁移清单与当前消费方
 
-### 4.1 运行时代码（19 个 TypeScript 文件）
+### 4.1 运行时代码
 
 | MedPi 文件 | MedHorizon 来源 | 主要适配 | 当前消费方 |
 |---|---|---|---|
-| `packages/science/extensions/index.ts` | 新 MedPi glue；参考 Pi extension API | 注册 8 tools；输入上限、project trust、branch events、HITL 和输出裁剪 | Pi `DefaultResourceLoader`、`.pi/settings.json` |
+| `packages/science/extensions/index.ts` | 新 MedPi glue；参考 Pi extension API | 注册 10 tools；输入上限、project trust、branch events、HITL、sandbox run/rollback 和输出裁剪 | Pi `DefaultResourceLoader`、`.pi/settings.json` |
 | `packages/science/src/files.ts` | `backend/cli/src/file/science.ts` | 去除旧 server/UI 依赖；改为 Node file handle；realpath root、`O_NOFOLLOW`、gzip 输出上限 | `science_inspect` |
 | `packages/science/src/workflow.ts` | `backend/cli/src/session/stage.ts` | 去除旧 Session/Bus/Snapshot；用 Pi custom entry 纯推导；强化 gate/terminal invariant | `science_stage` |
 | `packages/science/src/provenance.ts` | `science/provenance/store.ts` + `science/provenance/review.ts` | 合并为单文件本地 store；完整 SHA-256 ID；大小上限；0600 原子写 | 3 个 `provenance_*` tools |
@@ -132,6 +132,16 @@ apps/web (editable pi-web source)
 | `packages/science/src/connectors/pathways/util.ts` | 同名来源 | 仅保留 Reactome 所需 clamp/text/tag helpers | Reactome |
 | `packages/science/src/connectors/proteins/uniprot.ts` | 同名来源 | 防御性 JSON；组织过滤整体 URL encode；只保留 hit 所需字段 | registry |
 | `packages/science/src/connectors/proteins/util.ts` | 同名来源 | 删除 structure connector 与 opaque extra 所需 helper | UniProt |
+| `packages/science/src/sandbox/index.ts` | 新；设计见 `docs/plan/00-sandbox.md` | 沙箱公共导出 | `science_run` / `science_rollback` |
+| `packages/science/src/sandbox/types.ts` | 新 | provider 契约 | sandbox 实现 |
+| `packages/science/src/sandbox/process.ts` | 新 | 进程组 spawn/abort + 日志落盘 | `none` / `bwrap` |
+| `packages/science/src/sandbox/none.ts` | 新 | 默认无沙箱提供方（宿主权限） | `createSandbox("none")` |
+| `packages/science/src/sandbox/bwrap.ts` | 新 | Linux 可选 bwrap；全盘只读 + 项目/环境可写 | `createSandbox("bwrap")` |
+| `packages/science/src/sandbox/run-dir.ts` | 新 | `.medpi/runs/<id>/` 隔离目录 | runner / rollback |
+| `packages/science/src/sandbox/runner.ts` | 新 | 编排 checkpoint → spawn → provenance audit | `science_run` |
+| `packages/science/src/sandbox/rollback.ts` | 新 | git 存档点 + `git reset --hard` + 清隔离目录 | `science_rollback` |
+| `packages/science/src/sandbox/permission.ts` | 新 | 唯一 permission owner；默认 auto-allow，可切 confirm | `science_run` |
+| `packages/science/src/sandbox/factory.ts` | 新 | provider 工厂 | `science_run` |
 
 ### 4.2 Prompt、配置和测试
 
@@ -146,6 +156,8 @@ apps/web (editable pi-web source)
 | `packages/science/test/files.test.mjs` | 新 | 文件 magic/budget/symlink/gzip 行为 |
 | `packages/science/test/provenance.test.mjs` | 新 | 实际临时目录和真实文件 store |
 | `packages/science/test/workflow.test.mjs` | 新 | branch event 状态机和 gate invariant |
+| `packages/science/test/sandbox.test.mjs` | 新；真实 FS/进程，不 mock | none/audit/abort/rollback/permission；bwrap 不可用时 skip |
+| `docs/plan/00-sandbox.md` | 新；已确认决策 | 实现与验收依据 |
 
 ### 4.3 已主动删除的无消费方内容
 
@@ -278,7 +290,7 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 > 触发重新评估的硬条件：出现多用户共享、服务化部署（把应用放到服务器/容器供他人访问），或对 Web 接口健壮性提出明确要求时，两条 P1 应恢复推进。**P1-3（可重复交付：git 建档 + CI）与 P1-4（真实来源与模型验证）不受本说明影响，仍建议按原优先级推进**——前者保护个人代码资产不丢失，后者在开始真实使用模型与数据源时自然需要。
 | P2 | 科研产品消费层 | 目前 tool details 没有专用 React renderer；科学文件仍主要是 bounded text/metadata，binary 格式没有 deep parser/viewer。只有真实用例证明需要时再逐个添加 renderer，并冻结 bundle/WASM/worker/large-file 预算。 |
 | P2 | Provenance durability | 当前 DAG 是单进程原子 JSON 文件；仍无多进程 lock、fsync、签名、远端备份、快照/回放和版本迁移。规模或审计要求出现前不要引入第二个 graph store。 |
-| P3 | 任意代码与重型编排 | Python/R kernel、notebook、MCP sidecar、Research Graph/GEPA 和 subagent scheduler 继续禁用，直到 sandbox、唯一 permission owner、资源配额、abort/cleanup、redaction、审计和回滚先成立。 |
+| P3 | 任意代码与重型编排 | 最小沙箱闭环已落地（`science_run`/`science_rollback`：默认 none、可选 bwrap、permission owner、audit、abort、rollback；资源无限；redaction 按方案跳过）。R kernel、notebook UI、MCP sidecar、Research Graph/GEPA 和 subagent scheduler 仍禁用；勿复制旧 MedHorizon kernel 目录。 |
 
 另外，任何曾在本地日志或会话输出中暴露的 Web/API 凭据都必须按已泄露处理并轮换；仓库和本文不记录凭据值。
 
@@ -312,7 +324,7 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 | Solid/Atlas workspace UI | pi-web 是唯一 Web 壳，框架与状态模型不兼容 | 只按需求重写薄 React 组件，不复制旧壳 |
 | 33 个其余 connectors | 没有当前 consumer；部分涉及 key、许可、临床或更复杂 schema | 真实研究用例、host policy、contract test 同时存在 |
 | Mol*/RDKit/IGV/MSA/Sequence viewer | bundle、WASM/worker、DOM 和大文件预算尚未设计 | 先有明确文件/tool consumer，再逐个迁移 |
-| Python/R kernel、notebook | 任意代码执行；缺少 sandbox、资源配额、abort/cleanup 和 permission owner | 安全设计和 kill/timeout/resource tests 先通过 |
+| Python/R kernel、notebook UI | 最小沙箱闭环已有；不做旧 kernel/notebook 整目录迁移 | 真实 notebook UI 需求出现，且继续走 `science_run` 边界 |
 | Research Graph FastAPI/Vite sidecar | 引入 Python/SQLite/embedding/第二个图 store；当前 3 tools 无需它 | 本地 DAG 达到规模/查询瓶颈，且唯一图事实源迁移方案完成 |
 | GEPA/orchestrator/subagent scheduler | 依赖稳定的 permission、session、artifact 和 evaluation contract | 最小 agent/tool/browser 链路稳定后 |
 | MCP 实现 | Pi 已有扩展/package 能力，复制旧 MCP 会重复认证和工具事实源 | 确认 Pi 缺失的具体 MCP transport/auth 用例 |
@@ -379,7 +391,7 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 
 ### P3：高风险能力
 
-Python/R kernel、notebook、MCP sidecar、Research Graph/GEPA 和 subagents 必须先明确唯一 permission owner、sandbox、abort/timeout、资源回收、审计、redaction 和回滚，再迁移任何实现文件。
+最小沙箱闭环见 `docs/plan/00-sandbox.md` 与 `packages/science/src/sandbox/*`（`science_run` / `science_rollback`）。仍不要迁移旧 MedHorizon kernel/notebook/MCP/Research Graph/GEPA/subagent 实现文件；新能力必须复用现有 sandbox + permission owner，并由真实消费方驱动。
 
 ## 12. 审阅判定
 
@@ -387,8 +399,8 @@ Python/R kernel、notebook、MCP sidecar、Research Graph/GEPA 和 subagents 必
 
 当前可以接受的声明是：
 
-> MedPi 已有一个经过单元、集成和静态检查的最小 Pi 科研 package，提供 8 个科学数据源、科学文件有界检查、branch-local Stage/HITL、轻量 provenance 和 reviewer prompt。
+> MedPi 已有一个经过单元、集成和静态检查的最小 Pi 科研 package，提供 8 个科学数据源、科学文件有界检查、branch-local Stage/HITL、轻量 provenance、reviewer prompt，以及极宽松沙箱最小闭环（`science_run`/`science_rollback`）。
 
 当前不可以接受的声明是：
 
-> MedPi 已完成 MedHorizon 全功能重构、已具备 sandboxed kernel/Research Graph/科学 viewer，或已可安全公开生产部署。
+> MedPi 已完成 MedHorizon 全功能重构、已具备 notebook kernel/Research Graph/科学 viewer，或已可安全公开生产部署。

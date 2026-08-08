@@ -34,6 +34,8 @@ test("Pi loads exactly the active science tools and reviewer prompt", async () =
       "science_fetch",
       "science_inspect",
       "science_list_dbs",
+      "science_rollback",
+      "science_run",
       "science_search",
       "science_stage",
     ],

@@ -1,6 +1,6 @@
 # 00. 极宽松沙箱设计（已确认）
 
-- **状态**：**已确认（2026-08-08）**，决策冻结，进入实现
+- **状态**：**已实现最小闭环（2026-08-08）**；决策见 §9。代码：`packages/science/src/sandbox/*`，工具：`science_run` / `science_rollback`
 - **日期**：2026-08-08
 - **关联**：`AGENTS.md`（任意代码执行保持禁用，直到沙箱与 permission owner 存在）；`docs/science-platform-migration.md` §7.3 P3 / §11 P3
 
@@ -102,7 +102,7 @@
 - [x] Linux 上 1 行 sudo 解锁：**接受**（仅使用 bwrap 时需要）；
 - [x] 内存软告警：**暂不做**（可选，非硬限制，后续需要再加）；
 - [x] 打包：**每平台一个单文件（Node SEA）**：`medpi-run-linux` / `medpi-run-win.exe` / `medpi-run-macos`；
-- [x] 项目纳入 git（P1-3）：**执行**，作为实现第一步（rollback 的前提）。
+- [x] 项目纳入 git（P1-3）：**已完成**（2026-08-08，commit `227a4d7`，249 文件入版本库）；作为实现第一步，也是 rollback 的前提。
 
 ## 10. 参考
 

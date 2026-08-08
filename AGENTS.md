@@ -5,5 +5,5 @@
 - Do not copy whole MedHorizon directories. Every migrated file must be listed in `docs/science-platform-migration.md` with a current consumer.
 - Keep Pi types inside `packages/science/extensions`; domain modules under `src` must remain Pi-independent.
 - Scientific network requests must be abortable, bounded, and restricted to declared source hosts.
-- Arbitrary code execution (Python/R/kernel) stays disabled until a sandbox and permission owner exist.
+- Sandboxed project runs go through `science_run` / `packages/science/src/sandbox` (default provider `none`; Linux optional `bwrap`) with permission owner, audit, abort, and rollback. Do not add R/notebook/kernel UI or unsandboxed exec paths; keep credentials out of logs/provenance.
 - Do not commit `node_modules`, `.next`, credentials, sessions, runtime data, or generated artifacts.
