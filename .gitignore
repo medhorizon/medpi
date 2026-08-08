@@ -1,0 +1,17 @@
+node_modules/
+.next/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.medpi/
+.pi/npm/
+.pi/git/
+
+# local runtime config (machine-specific paths)
+.pi/settings.json

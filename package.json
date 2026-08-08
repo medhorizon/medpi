@@ -1,0 +1,27 @@
+{
+  "name": "medpi",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "npm@10.9.3",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "workspaces": [
+    "apps/web",
+    "packages/science"
+  ],
+  "overrides": {
+    "postcss": "8.5.26",
+    "sharp": "0.35.3"
+  },
+  "scripts": {
+    "dev": "npm --workspace @medpi/web run dev",
+    "dev:lan": "npm --workspace @medpi/web run dev:lan",
+    "test": "npm --workspace @medpi/science test && npm --workspace @medpi/web test",
+    "test:science": "npm --workspace @medpi/science test",
+    "test:web": "npm --workspace @medpi/web test",
+    "typecheck": "npm --workspace @medpi/science run typecheck && npm --workspace @medpi/web run typecheck",
+    "lint": "npm --workspace @medpi/web run lint",
+    "audit": "npm audit --registry=https://registry.npmjs.org --omit=dev"
+  }
+}

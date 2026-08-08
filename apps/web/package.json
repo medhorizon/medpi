@@ -1,0 +1,58 @@
+{
+  "name": "@medpi/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MedPi web workspace, based on pi-web v0.8.6",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 30141",
+    "dev:lan": "next dev -H 0.0.0.0 -p 30141",
+    "start": "next start -H 127.0.0.1 -p 30141",
+    "start:lan": "next start -H 0.0.0.0 -p 30141",
+    "test": "env -u PI_WEB_PASSWORD node --experimental-strip-types --test components/*.test.mjs hooks/*.test.mjs lib/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.1",
+    "@earendil-works/pi-ai": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-tui": "0.84.1",
+    "next": "16.2.12",
+    "proper-lockfile": "4.1.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "undici": "8.10.0"
+  },
+  "devDependencies": {
+    "@lobehub/icons": "^5.6.0",
+    "@tailwindcss/postcss": "^4.2.2",
+    "@types/node": "^25",
+    "@types/proper-lockfile": "4.1.4",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.12",
+    "jiti": "^2.7.0",
+    "katex": "^0.16.47",
+    "mammoth": "^1.12.0",
+    "mermaid": "^11.14.0",
+    "postcss": "^8",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5"
+  },
+  "medpi": {
+    "upstream": "agegr/pi-web@dfab5853b8d2f717df259e7ebc94f49a3c2e43e7"
+  }
+}
