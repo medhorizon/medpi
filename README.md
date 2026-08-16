@@ -4,7 +4,7 @@ MedPi is a minimal science platform built on Pi `0.84.1` and the editable pi-web
 
 The active MedHorizon-derived code is intentionally limited to [`packages/science`](packages/science). It is loaded as a normal Pi package and does not fork Pi core or copy the legacy MedHorizon runtime/UI.
 
-> **Development baseline, not a public-production release.** Production dependency audit is clean, but a real-model browser flow, OS sandbox, and public deployment controls remain outside this slice. See the migration review before deployment.
+> **Development baseline, not a public-production release.** Production dependency audit is clean, and a minimal sandbox closed loop (`science_run`/`science_rollback`: default no-sandbox, Linux-optional bwrap, with audit/abort/rollback) is in place. A real-model browser flow and public deployment controls remain outside this slice. See the migration review before deployment.
 
 ## Start here
 

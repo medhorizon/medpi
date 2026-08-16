@@ -9,7 +9,7 @@
 
 ## Follow-ups（非本轮）
 
-- [ ] Node SEA 打包 `medpi-run-*`
-- [ ] 本机解锁 bwrap 后跑通硬边界验收
+- [ ] Node SEA 打包 `medpi-run-*`（**已决定延后：2026-08-08 先用开发版直接 node 运行，暂不打包**）
+- [ ] 本机解锁 bwrap 后跑通硬边界验收（可选，默认无沙箱不受影响）
 - [ ] podman provider（可选）
 - [ ] R / notebook UI（需求出现时）

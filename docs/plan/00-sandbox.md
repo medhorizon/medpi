@@ -58,7 +58,7 @@
 
 启动策略：**默认无沙箱启动**；Linux 上用户可显式选择 bwrap 沙箱。不做自动切换，由用户显式指定。
 
-**打包**：每个平台各自编译一个单文件（Node SEA）：`medpi-run-linux` / `medpi-run-win.exe` / `medpi-run-macos`；bwrap 仅打进 Linux 包。跨平台编译不可行，需各平台各编一次。
+**打包**：每个平台各自编译一个单文件（Node SEA）：`medpi-run-linux` / `medpi-run-win.exe` / `medpi-run-macos`；bwrap 仅打进 Linux 包。跨平台编译不可行，需各平台各编一次。**（2026-08-08：已决定延后，先用开发版直接 node 运行，暂不打包；将来需要分发时再执行）**
 
 ## 6. 最小闭环（P3 七门 → 最小实现）
 
@@ -101,7 +101,7 @@
 - [x] 沙箱默认策略：**默认无沙箱启动**；Linux 可选 bwrap（用户显式启用）；podman 可选。
 - [x] Linux 上 1 行 sudo 解锁：**接受**（仅使用 bwrap 时需要）；
 - [x] 内存软告警：**暂不做**（可选，非硬限制，后续需要再加）；
-- [x] 打包：**每平台一个单文件（Node SEA）**：`medpi-run-linux` / `medpi-run-win.exe` / `medpi-run-macos`；
+- [x] 打包：**先用开发版（直接 node 运行），SEA 单文件打包延后**（2026-08-08 决定）；将来需要分发时再按每平台一个 Node SEA 单文件方案执行
 - [x] 项目纳入 git（P1-3）：**已完成**（2026-08-08，commit `227a4d7`，249 文件入版本库）；作为实现第一步，也是 rollback 的前提。
 
 ## 10. 参考

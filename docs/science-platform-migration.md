@@ -46,7 +46,7 @@ MedHorizon 相对原生 Pi + pi-web 最有价值的优势，不是另一套 agen
 | 科学数据库连接器 | `backend/cli/src/science/connectors/` 有 41 个具体实现，覆盖文献、化学、基因组、蛋白、通路和 omics；统一 search/fetch contract | Pi 可调用通用网络工具，但没有这套领域归一化、来源目录和限流语义 | **迁移最小 8 个** |
 | 科学文件路由 | `backend/cli/src/file/science.ts` 有格式 manifest、magic/extension 判定和 read policy | pi-web 有通用文件 viewer，但不理解 HDF5/H5AD、FASTQ、VCF、PDB 等科学语义 | **迁移识别与有界文本预览** |
 | 专用科学 viewer | `frontend/workspace/src/science/renderers/` 含 Sequence/MSA、GenomeTrack、RDKit 2D、Mol* protein、LaTeX、PDF 等 | pi-web 的通用 image/PDF/text/markdown 预览不能替代结构、生信和化学可视化 | **暂不复制**；没有 React 消费方和性能预算 |
-| Python/R notebook | `science/kernel/*`、`tool/notebook.ts`、`tool/rkernel.ts` 具有生命周期和工具入口 | Pi 的 bash 能执行程序，但不是 notebook kernel、安全沙箱或资源治理层 | **阻塞**；先确定 sandbox、permission owner、资源回收和审计 |
+| Python/R notebook | `science/kernel/*`、`tool/notebook.ts`、`tool/rkernel.ts` 具有生命周期和工具入口 | Pi 的 bash 能执行程序，但不是 notebook kernel、安全沙箱或资源治理层 | **不复制旧实现**；已建最小沙箱闭环（`science_run`/`science_rollback`，任意代码可执行）；notebook UI 等真实需求出现时再按 `science_run` 边界加 |
 | Research Stage/HITL | `session/stage.ts` 与旧 StagesPanel 支持研究阶段、审批和落地 | Pi 有通用交互/UI hooks，但没有科研阶段状态机 | **迁移状态语义**，UI 先用普通 tool result |
 | Provenance | `science/provenance/store.ts`、`review.ts`、`tool/provenance.ts` 建模 source/run/artifact/claim 和 evidence edges | Pi session 能记录 tool call，但不等于跨工件科研 lineage | **迁移轻量项目 DAG** |
 | 科研审查 | reviewer prompt、Aletheia/专家代理与 evidence-oriented workflows | Pi 有 prompt/skill 机制，但没有 MedHorizon 的科研审查内容 | **迁移一个最小 reviewer prompt**；不复制代理 runtime |
@@ -357,7 +357,7 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 - Chrome DevTools/Playwright 的 DOM、console、network、abort/reconnect 和 accessibility 验证；
 - 8 个公共 source 的 live contract CI（当前 HTTP 安全测试使用真实本地 transport，避免外部 flaky test）；
 - 专用 Stage/provenance/scientific viewer React UI；
-- 多进程 provenance、kernel、Research Graph sidecar。
+- 多进程 provenance、notebook kernel UI、Research Graph sidecar。
 
 ## 11. 下一步：只按消费方增加
 
