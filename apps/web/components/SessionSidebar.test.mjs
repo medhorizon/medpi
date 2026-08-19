@@ -12,6 +12,11 @@ test("only Shift+click bypasses session deletion confirmation", () => {
   );
 });
 
+test("keeps a session in the sidebar when deletion is rejected", () => {
+  assert.match(sessionItemSource, /if \(!response\.ok\) throw new Error/);
+  assert.match(sessionItemSource, /onDeleted\?\.\(session\.id\)/);
+});
+
 test("does not register row-level session deletion shortcuts", () => {
   assert.doesNotMatch(sessionItemSource, /const handleKeyDown/);
   assert.doesNotMatch(sessionItemSource, /onKeyDown=\{handleKeyDown\}/);

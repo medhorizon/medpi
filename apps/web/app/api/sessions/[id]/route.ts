@@ -12,6 +12,7 @@ import {
 } from "@/lib/session-reader";
 import { sessionPathKey } from "@/lib/session-path";
 import { getRpcSession } from "@/lib/rpc-manager";
+import { resolveGroupMeetingSessionPolicy } from "@/lib/group-meeting-server";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
@@ -201,6 +202,12 @@ export async function DELETE(
 ) {
   const { id } = await params;
   try {
+    if (await resolveGroupMeetingSessionPolicy(id)) {
+      return NextResponse.json(
+        { error: "Group meeting sessions cannot be deleted directly" },
+        { status: 409 },
+      );
+    }
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
