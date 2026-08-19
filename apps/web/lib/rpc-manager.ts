@@ -1215,7 +1215,6 @@ export async function startRpcSession(
   options: RpcSessionStartOptions = {},
 ): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
   const { toolNames: requestedToolNames, initialModel, thinkingLevel, persistStartupPreferences = true, fixedToolNames, fixedSystemPrompt } = options;
-  const toolNames = fixedToolNames ?? requestedToolNames;
   const registry = getRegistry();
   const locks = getLocks();
 
@@ -1238,6 +1237,17 @@ export async function startRpcSession(
     // Some extensions access the SDK's global theme even outside the terminal UI.
     initTheme();
     const agentDir = getAgentDir();
+    const meetingPolicy = sessionFile
+      ? await import("./group-meeting-server").then(({ resolveGroupMeetingSessionPolicy }) => (
+        resolveGroupMeetingSessionPolicy(sessionId, agentDir)
+      ))
+      : null;
+    const boundModel = initialModel ?? meetingPolicy?.initialModel;
+    const boundThinkingLevel = thinkingLevel ?? meetingPolicy?.thinkingLevel;
+    const toolNames = meetingPolicy?.toolNames ?? fixedToolNames ?? requestedToolNames;
+    const boundFixedToolNames = meetingPolicy?.toolNames ?? fixedToolNames;
+    const boundSystemPrompt = meetingPolicy?.systemPrompt ?? fixedSystemPrompt;
+    const shouldPersistStartupPreferences = meetingPolicy ? false : persistStartupPreferences;
 
     // Determine which tools to pass based on requested toolNames.
     // Since v0.68.0, session creation expects string[] tool names instead of Tool[] instances.
@@ -1270,14 +1280,14 @@ export async function startRpcSession(
     const defaultProvider = services.settingsManager.getDefaultProvider();
     const defaultModelId = services.settingsManager.getDefaultModel();
     const hasExistingMessages = sessionManager.getBranch().some((entry) => entry.type === "message");
-    const initial = hasExistingMessages
+    const initial = hasExistingMessages && !boundModel
       ? { scopedModels: [...scope.scopedModels] }
       : selectInitialModelScope(scope, {
-        ...(initialModel ? { requestedModel: initialModel } : {}),
+        ...(boundModel ? { requestedModel: boundModel } : {}),
         ...(defaultProvider && defaultModelId
           ? { defaultModel: { provider: defaultProvider, modelId: defaultModelId } }
           : {}),
-        ...(thinkingLevel ? { thinkingLevel } : {}),
+        ...(boundThinkingLevel ? { thinkingLevel: boundThinkingLevel } : {}),
       });
     const { session: inner } = await createAgentSessionFromServices({
       services,
@@ -1288,12 +1298,12 @@ export async function startRpcSession(
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
     });
 
-    if (persistStartupPreferences) {
+    if (shouldPersistStartupPreferences) {
       const persistedPreferences = await persistExplicitStartupPreferences(
         services.settingsManager,
         {
-          ...(initialModel ? { model: initialModel } : {}),
-          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(boundModel ? { model: boundModel } : {}),
+          ...(boundThinkingLevel ? { thinkingLevel: boundThinkingLevel } : {}),
         },
         {
           ...(inner.model
@@ -1306,7 +1316,7 @@ export async function startRpcSession(
       if (persistedPreferences.modelDefaultChanged) invalidateModelsCache();
     }
 
-    const wrapper = new AgentSessionWrapper(inner, fixedToolNames, fixedSystemPrompt);
+    const wrapper = new AgentSessionWrapper(inner, boundFixedToolNames, boundSystemPrompt);
     if (toolNames !== undefined) wrapper.setActiveTools(toolNames);
     // When all tools are disabled, clear the system prompt entirely.
     // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;

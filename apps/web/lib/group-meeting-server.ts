@@ -58,17 +58,6 @@ export interface GroupMeetingSessionPolicy {
   thinkingLevel?: GroupMeetingThinkingLevel;
 }
 
-export function getGroupMeetingSessionStartOptions(policy: GroupMeetingSessionPolicy) {
-  return {
-    toolNames: policy.toolNames,
-    ...(policy.initialModel ? { initialModel: policy.initialModel } : {}),
-    ...(policy.thinkingLevel ? { thinkingLevel: policy.thinkingLevel } : {}),
-    persistStartupPreferences: false,
-    fixedToolNames: policy.toolNames,
-    fixedSystemPrompt: policy.systemPrompt,
-  };
-}
-
 export function getGroupMeetingSessionPolicy(
   meeting: GroupMeeting,
   sessionId: string,
@@ -330,14 +319,9 @@ async function applyMemberSettings(
   if (!session?.isAlive()) {
     const sessionFile = await resolveSessionPath(member.sessionId);
     if (!sessionFile) throw new Error(`Session not found: ${member.sessionId}`);
-    const toolNames = getGroupMeetingToolNames(member.role);
     ({ session } = await startRpcSession(member.sessionId, sessionFile, undefined, {
-      toolNames,
       initialModel: { provider: settings.provider, modelId: settings.modelId },
       thinkingLevel: settings.thinkingLevel,
-      persistStartupPreferences: false,
-      fixedToolNames: toolNames,
-      fixedSystemPrompt: getGroupMeetingRoleSystemPrompt(member.role),
     }));
   }
 
@@ -448,20 +432,33 @@ export async function resolveGroupMeetingSessionPolicy(
     throw error;
   }
 
+  const meetings = new Map<string, GroupMeeting>();
   for (const projectDirectory of projectDirectories) {
     if (!projectDirectory.isDirectory()) continue;
     const directory = join(agentDir, "meetings", projectDirectory.name);
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name.endsWith(".workflow.json")) continue;
-      const policy = getGroupMeetingSessionPolicy(
-        parseMeeting(await readFile(join(directory, entry.name), "utf8")),
-        sessionId,
-      );
+      const meeting = parseMeeting(await readFile(join(directory, entry.name), "utf8"));
+      meetings.set(meeting.meetingId, meeting);
+      const policy = getGroupMeetingSessionPolicy(meeting, sessionId);
       if (policy) return policy;
     }
   }
-  return resolveLabWorkflowChildSessionPolicy(sessionId, agentDir);
+  const child = await resolveLabWorkflowChildSessionPolicy(sessionId, agentDir);
+  if (!child) return null;
+  const meeting = meetings.get(child.meetingId);
+  const undergraduate = meeting?.members.find((member) => member.role === "undergraduate");
+  if (!undergraduate?.provider || !undergraduate.modelId || !undergraduate.thinkingLevel) {
+    throw new GroupMeetingError("Undergraduate model settings are unavailable", "invalid_metadata", "undergraduate");
+  }
+  return {
+    role: child.role,
+    toolNames: child.toolNames,
+    systemPrompt: child.systemPrompt,
+    initialModel: { provider: undergraduate.provider, modelId: undergraduate.modelId },
+    thinkingLevel: undergraduate.thinkingLevel,
+  };
 }
 
 export async function listGroupMeetings(

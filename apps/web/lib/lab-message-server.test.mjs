@@ -137,16 +137,11 @@ test("concurrent sends keep every canonical route record", async () => {
   assert.equal(audit.messages.length, 8);
 });
 
-test("cold delivery restores the fixed role tool policy", async () => {
+test("cold delivery delegates group-session binding to the RPC startup layer", async () => {
   const source = await readFile(new URL("./lab-message-server.ts", import.meta.url), "utf8");
   const coldDelivery = source.slice(source.indexOf("async function deliverToSession"), source.indexOf("function receipt"));
-  assert.match(coldDelivery, /getGroupMeetingToolNames\(recipient\.role\)/);
-  assert.match(coldDelivery, /toolNames,/);
-  assert.match(coldDelivery, /initialModel: \{ provider: recipient\.provider, modelId: recipient\.modelId \}/);
-  assert.match(coldDelivery, /thinkingLevel: recipient\.thinkingLevel/);
-  assert.match(coldDelivery, /persistStartupPreferences: false/);
-  assert.match(coldDelivery, /fixedToolNames: toolNames/);
-  assert.match(coldDelivery, /fixedSystemPrompt: getGroupMeetingRoleSystemPrompt\(recipient\.role\)/);
+  assert.match(coldDelivery, /startRpcSession\(recipient\.sessionId, sessionFile, undefined\)/);
+  assert.doesNotMatch(coldDelivery, /initialModel|thinkingLevel|fixedToolNames|fixedSystemPrompt/);
 });
 
 test("relative and absolute cwd use one meeting audit lock", async () => {
