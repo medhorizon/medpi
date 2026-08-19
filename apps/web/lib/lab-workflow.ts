@@ -951,12 +951,14 @@ function actionFingerprint(action: LabOrchestrateAction): string {
   return createHash("sha256").update(stableJson(action)).digest("hex");
 }
 
-function markRestartedWorkInterrupted(workflow: LabWorkflow, runtimeId: string, now: string): boolean {
-  if (workflow.runtimeId === runtimeId) return false;
+function markRestartedWorkInterrupted(workflow: LabWorkflow, runtimeId: string, now: string): string[] | null {
+  if (workflow.runtimeId === runtimeId) return null;
+  const sessionIds: string[] = [];
   for (const thread of workflow.undergradThreads) {
     if (ACTIVE_THREAD_STATUSES.has(thread.status)) {
       thread.status = "interrupted";
       thread.updatedAt = now;
+      if (thread.sessionId) sessionIds.push(thread.sessionId);
     }
   }
   for (const task of workflow.undergradTasks) {
@@ -978,7 +980,7 @@ function markRestartedWorkInterrupted(workflow: LabWorkflow, runtimeId: string, 
   }
   workflow.runtimeId = runtimeId;
   workflow.updatedAt = now;
-  return true;
+  return sessionIds;
 }
 
 async function defaultCreateChildSession(input: ChildSessionInput): Promise<{ sessionId: string }> {
@@ -1018,6 +1020,12 @@ async function defaultCreateChildSession(input: ChildSessionInput): Promise<{ se
 
 async function defaultAbortSession(sessionId: string): Promise<void> {
   await getRpcSession(sessionId)?.send({ type: "abort" });
+}
+
+async function abortSessions(sessionIds: string[], options: LabWorkflowOptions): Promise<void> {
+  if (sessionIds.length === 0) return;
+  const abortSession = options.abortSession ?? defaultAbortSession;
+  await Promise.all(sessionIds.map((sessionId) => abortSession(sessionId).catch(() => {})));
 }
 
 async function defaultDeliverTask({ meeting, task }: UndergradTaskDeliveryInput): Promise<void> {
@@ -1517,8 +1525,7 @@ async function applyAction(
       task.status = "cancelled";
       task.updatedAt = now;
       await persist();
-      const abortSession = options.abortSession ?? defaultAbortSession;
-      await Promise.all(activeSessions.map((sessionId) => abortSession(sessionId).catch(() => {})));
+      await abortSessions(activeSessions, options);
       break;
     }
     case "complete_meeting": {
@@ -1565,22 +1572,29 @@ async function applyAction(
       }
       workflow.status = "cancelled";
       await persist();
-      const abortSession = options.abortSession ?? defaultAbortSession;
-      await Promise.all(activeSessions.map((sessionId) => abortSession(sessionId).catch(() => {})));
+      await abortSessions(activeSessions, options);
       break;
     }
   }
   workflow.updatedAt = nowValue(options);
 }
 
-async function prepareLockedWorkflow(cwd: string, meetingId: string, options: LabWorkflowOptions): Promise<{ meeting: GroupMeeting; workflow: LabWorkflow; agentDir: string; path: string }> {
+async function prepareLockedWorkflow(
+  cwd: string,
+  meetingId: string,
+  options: LabWorkflowOptions,
+  recoverInterrupted = false,
+): Promise<{ meeting: GroupMeeting; workflow: LabWorkflow; agentDir: string; path: string }> {
   const agentDir = options.agentDir ?? getAgentDir();
   const meeting = await resolveMeeting(cwd, meetingId, options);
   const path = workflowPath(meeting.cwd, meeting.meetingId, agentDir);
   const now = nowValue(options);
   const { workflow, created } = await loadWorkflow(path, meeting, options.runtimeId ?? DEFAULT_RUNTIME_ID, now);
-  const recovered = !created && markRestartedWorkInterrupted(workflow, options.runtimeId ?? DEFAULT_RUNTIME_ID, now);
-  if (created || recovered) await writeWorkflow(workflow, agentDir);
+  const interruptedSessions = !created && recoverInterrupted
+    ? markRestartedWorkInterrupted(workflow, options.runtimeId ?? DEFAULT_RUNTIME_ID, now)
+    : null;
+  if (created || interruptedSessions) await writeWorkflow(workflow, agentDir);
+  if (interruptedSessions) await abortSessions(interruptedSessions, options);
   return { meeting, workflow, agentDir, path };
 }
 
@@ -1717,7 +1731,7 @@ export async function orchestrateLabWorkflow(input: OrchestrateLabWorkflowInput,
   if (action.action === "get_state") return readLabWorkflow(input, options);
   const agentDir = options.agentDir ?? getAgentDir();
   return withMeetingLock(input.cwd, input.meetingId, agentDir, async () => {
-    const { meeting, workflow } = await prepareLockedWorkflow(input.cwd, input.meetingId, options);
+    const { meeting, workflow } = await prepareLockedWorkflow(input.cwd, input.meetingId, options, true);
     const actor = resolveActor(meeting, workflow, input.actorSessionId);
     const fingerprint = actionFingerprint(action);
     const existing = workflow.idempotency[action.requestId];
@@ -1745,7 +1759,7 @@ export async function orchestrateLabWorkflow(input: OrchestrateLabWorkflowInput,
 export async function recoverInterruptedLabWorkflow(cwd: string, meetingId: string, options: LabWorkflowOptions = {}): Promise<LabWorkflow> {
   const agentDir = options.agentDir ?? getAgentDir();
   return withMeetingLock(cwd, meetingId, agentDir, async () => {
-    const { workflow } = await prepareLockedWorkflow(cwd, meetingId, options);
+    const { workflow } = await prepareLockedWorkflow(cwd, meetingId, options, true);
     return structuredClone(workflow);
   });
 }

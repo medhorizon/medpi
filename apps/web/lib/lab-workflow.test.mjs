@@ -651,14 +651,17 @@ test("restart marks pending operations interrupted, requires a new request id, r
   await writeFile(path, `${JSON.stringify(persisted, null, 2)}\n`);
 
   workflow = await readLabWorkflow({ cwd: context.cwd, meetingId: context.meeting.meetingId, actorSessionId: "session-pi" }, { ...context.options, runtimeId: "runtime-b" });
-  assert.equal(workflow.undergradThreads.find((entry) => entry.threadId === oldThread.threadId).status, "interrupted");
-  assert.equal(workflow.undergradTasks.find((entry) => entry.taskId === task.taskId).status, "interrupted");
-  const recovered = JSON.parse(await readFile(path, "utf8"));
-  assert.equal(recovered.idempotency["retry-spawn"].status, "interrupted");
+  assert.equal(workflow.undergradThreads.find((entry) => entry.threadId === oldThread.threadId).status, "running");
+  assert.equal(workflow.undergradTasks.find((entry) => entry.taskId === task.taskId).status, "running");
+  assert.equal(JSON.parse(await readFile(path, "utf8")).idempotency["retry-spawn"].status, "pending");
+  assert.deepEqual(aborted, []);
+
   await assert.rejects(
     () => context.call("undergraduate", { action: "spawn_undergrad_threads", requestId: "retry-spawn", taskId: task.taskId, threads: [threadSpec("retry")] }, { runtimeId: "runtime-b" }),
     (error) => error instanceof LabWorkflowError && error.code === "operation_interrupted",
   );
+  assert.equal(JSON.parse(await readFile(path, "utf8")).undergradThreads.find((entry) => entry.threadId === oldThread.threadId).status, "interrupted");
+  assert.deepEqual(aborted, [oldThread.sessionId]);
 
   workflow = await context.call("undergraduate", { action: "spawn_undergrad_threads", requestId: "retry-spawn-new", taskId: task.taskId, threads: [threadSpec("retry")] }, { runtimeId: "runtime-b" });
   const retryThread = workflow.undergradThreads.find((entry) => entry.parentTaskId === task.taskId && entry.attempt === 2);
@@ -666,7 +669,7 @@ test("restart marks pending operations interrupted, requires a new request id, r
   const cancel = { action: "cancel_task", requestId: "cancel-retry", taskId: task.taskId };
   await context.call("phd-1", cancel, { runtimeId: "runtime-b" });
   await context.call("phd-1", cancel, { runtimeId: "runtime-b" });
-  assert.deepEqual(aborted, [retryThread.sessionId]);
+  assert.deepEqual(aborted, [oldThread.sessionId, retryThread.sessionId]);
 });
 
 test("workflow route applies origin, JSON, cwd, session, and unified action checks", async () => {
