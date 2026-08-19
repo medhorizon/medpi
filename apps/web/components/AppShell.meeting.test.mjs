@@ -4,9 +4,10 @@ import test from "node:test";
 
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 
-test("restores only the explicit meeting and keeps its cwd in navigation", () => {
+test("restores explicit and recent meetings while keeping their cwd in navigation", () => {
   assert.match(source, /useGroupMeeting\(meetingCwd, meetingMode \? initialNavigation\.meetingId : null\)/);
-  assert.match(source, /buildMeetingNavigationUrl\(created\.meetingId, created\.cwd\)/);
+  assert.match(source, /const opened = await openMeeting\(\)/);
+  assert.match(source, /buildMeetingNavigationUrl\(opened\.meetingId, opened\.cwd\)/);
 });
 
 test("guards desktop meeting creation and preserves the previous chat", () => {

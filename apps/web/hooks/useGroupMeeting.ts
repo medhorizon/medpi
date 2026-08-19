@@ -66,13 +66,20 @@ export function validateGroupMeeting(value: unknown, expectedCwd: string): Group
   return value as unknown as GroupMeeting;
 }
 
+export function validateGroupMeetingList(value: unknown, expectedCwd: string): GroupMeeting[] {
+  if (!isRecord(value) || !Array.isArray(value.meetings)) {
+    throw new Error("Invalid group meeting list response");
+  }
+  return value.meetings.map((meeting) => validateGroupMeeting(meeting, expectedCwd));
+}
+
 export function useGroupMeeting(cwd: string | null, meetingId: string | null = null) {
   const [meeting, setMeeting] = useState<GroupMeeting | null>(null);
   const [loading, setLoading] = useState(Boolean(cwd && meetingId));
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generationRef = useRef(0);
-  const creatingRef = useRef(false);
+  const openingRef = useRef(false);
 
   const activeMeetingIdRef = useRef<string | null>(meetingId);
 
@@ -126,14 +133,27 @@ export function useGroupMeeting(cwd: string | null, meetingId: string | null = n
     return () => { generationRef.current += 1; };
   }, [cwd, meetingId, loadMeeting]);
 
-  const createMeeting = useCallback(async () => {
-    if (!cwd || creatingRef.current) return null;
-    creatingRef.current = true;
+  const openMeeting = useCallback(async () => {
+    if (!cwd || openingRef.current) return null;
+    openingRef.current = true;
     const generation = ++generationRef.current;
     setLoading(false);
     setCreating(true);
     setError(null);
     try {
+      const listResponse = await fetch(`/api/meetings?cwd=${encodeURIComponent(cwd)}`, { cache: "no-store" });
+      const listPayload: unknown = await listResponse.json();
+      if (!listResponse.ok) throw new Error(responseError(listPayload, listResponse.status));
+      const existing = validateGroupMeetingList(listPayload, cwd)
+        .find((candidate) => candidate.status === "ready");
+      if (existing) {
+        if (generation === generationRef.current) {
+          activeMeetingIdRef.current = existing.meetingId;
+          setMeeting(existing);
+        }
+        return existing;
+      }
+
       const response = await fetch("/api/meetings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -162,7 +182,7 @@ export function useGroupMeeting(cwd: string | null, meetingId: string | null = n
       if (generation === generationRef.current) setError(cause instanceof Error ? cause.message : String(cause));
       return null;
     } finally {
-      creatingRef.current = false;
+      openingRef.current = false;
       if (generation === generationRef.current) setCreating(false);
     }
   }, [cwd]);
@@ -176,5 +196,5 @@ export function useGroupMeeting(cwd: string | null, meetingId: string | null = n
     setCreating(false);
   }, []);
 
-  return { meeting, loading, creating, error, loadMeeting, refresh, createMeeting, leaveMeeting };
+  return { meeting, loading, creating, error, loadMeeting, refresh, openMeeting, leaveMeeting };
 }

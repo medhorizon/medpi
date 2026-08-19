@@ -168,11 +168,13 @@ test("creates six distinct sessions, persists them atomically, and restores the 
   assert.deepEqual(restoredPolicy, originalPolicy);
   assert.deepEqual(restoredPolicy?.toolNames, getGroupMeetingToolNames("undergraduate"));
   assert.equal(restoredPolicy?.systemPrompt, getGroupMeetingRoleSystemPrompt("undergraduate"));
+  const [projectDirectory] = await readdir(join(agentDir, "meetings"));
+  await writeFile(join(agentDir, "meetings", projectDirectory, `${meeting.meetingId}.workflow.json`), "{}");
   assert.deepEqual((await listGroupMeetings(cwd, agentDir)).map((entry) => entry.meetingId), [meeting.meetingId]);
   assert.equal(sequence, 6, "GET-style reads must not create replacement sessions");
   const projectDirs = await readdir(join(agentDir, "meetings"));
   const files = await readdir(join(agentDir, "meetings", projectDirs[0]));
-  assert.deepEqual(files, [`${meeting.meetingId}.json`]);
+  assert.deepEqual(files.sort(), [`${meeting.meetingId}.json`, `${meeting.meetingId}.workflow.json`].sort());
 });
 
 test("cold-restores an undergraduate child with the fixed isolated policy", async () => {

@@ -271,7 +271,7 @@ export async function listGroupMeetings(
     throw error;
   }
   const meetings = await Promise.all(entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json") && !entry.name.endsWith(".workflow.json"))
     .map(async (entry) => parseMeeting(await readFile(join(directory, entry.name), "utf8"))));
   if (meetings.some((meeting) => meeting.cwd !== cwd)) {
     throw new GroupMeetingError("Meeting metadata does not match its project", "invalid_metadata");

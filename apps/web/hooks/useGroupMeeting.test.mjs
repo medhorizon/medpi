@@ -4,7 +4,7 @@ import test from "node:test";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
-const { validateGroupMeeting } = await jiti.import("./useGroupMeeting.ts");
+const { validateGroupMeeting, validateGroupMeetingList } = await jiti.import("./useGroupMeeting.ts");
 const { GROUP_MEETING_ROSTER } = await jiti.import("../lib/group-meeting.ts");
 const hookSource = await readFile(new URL("./useGroupMeeting.ts", import.meta.url), "utf8");
 
@@ -60,18 +60,28 @@ test("accepts a persisted creating meeting without inventing sessions", () => {
   assert.equal(validateGroupMeeting(creating, creating.cwd), creating);
 });
 
-test("locks creation and restores only an explicitly selected meeting id", () => {
-  assert.match(hookSource, /if \(!cwd \|\| creatingRef\.current\) return null/);
-  assert.match(hookSource, /creatingRef\.current = true/);
+test("validates persisted meeting lists", () => {
+  const first = validMeeting();
+  const second = { ...validMeeting(), meetingId: "meeting-2" };
+  assert.deepEqual(validateGroupMeetingList({ meetings: [first, second] }, first.cwd), [first, second]);
+  assert.throws(() => validateGroupMeetingList({ meetings: [first] }, "/tmp/other"), /Invalid group meeting response/);
+});
+
+test("locks opening and restores the latest ready meeting before creating", () => {
+  assert.match(hookSource, /if \(!cwd \|\| openingRef\.current\) return null/);
+  assert.match(hookSource, /openingRef\.current = true/);
   assert.match(hookSource, /useGroupMeeting\(cwd: string \| null, meetingId: string \| null = null\)/);
   assert.match(hookSource, /`\/api\/meetings\/\$\{encodeURIComponent\(normalizedId\)\}\?cwd=\$\{encodeURIComponent\(cwd\)\}`/);
-  assert.doesNotMatch(hookSource, /fetch\(`\/api\/meetings\?cwd=/);
+  const lookup = hookSource.indexOf("fetch(`/api/meetings?cwd=");
+  const creation = hookSource.indexOf('fetch("/api/meetings"', lookup);
+  assert.ok(lookup >= 0 && creation > lookup);
+  assert.match(hookSource, /find\(\(candidate\) => candidate\.status === "ready"\)/);
   assert.match(hookSource, /if \(cwd && meetingId\)[\s\S]*loadMeeting\(meetingId\)/);
   assert.match(hookSource, /Project cwd is required to load a meeting/);
 });
 
 test("preserves backend diagnostics for preflight failures", () => {
-  const responseCheck = hookSource.indexOf("if (!response.ok)", hookSource.indexOf("const createMeeting"));
+  const responseCheck = hookSource.indexOf("if (!response.ok)", hookSource.indexOf("const openMeeting"));
   const successValidation = hookSource.indexOf("const nextMeeting", responseCheck);
   assert.ok(responseCheck >= 0 && successValidation > responseCheck);
   assert.match(hookSource, /failedCandidate[\s\S]*responseError\(payload, response\.status\)/);

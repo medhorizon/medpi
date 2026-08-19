@@ -284,7 +284,7 @@ export function AppShell() {
     loading: meetingLoading,
     creating: meetingCreating,
     error: meetingError,
-    createMeeting,
+    openMeeting,
     leaveMeeting,
   } = useGroupMeeting(meetingCwd, meetingMode ? initialNavigation.meetingId : null);
   const {
@@ -375,11 +375,11 @@ export function AppShell() {
     setMeetingMode(true);
     setActiveTopPanel(null);
 
-    const created = await createMeeting();
-    if (!created || !meetingModeRef.current) return;
+    const opened = await openMeeting();
+    if (!opened || !meetingModeRef.current) return;
     setRefreshKey((key) => key + 1);
-    router.replace(buildMeetingNavigationUrl(created.meetingId, created.cwd), { scroll: false });
-  }, [createMeeting, exitMeeting, isMobile, meetingCreating, meetingCwd, meetingMode, newSessionCwd, router, selectedSession]);
+    router.replace(buildMeetingNavigationUrl(opened.meetingId, opened.cwd), { scroll: false });
+  }, [exitMeeting, isMobile, meetingCreating, meetingCwd, meetingMode, newSessionCwd, openMeeting, router, selectedSession]);
 
   const handleCwdChange = useCallback((cwd: string | null, projectRoot?: string | null) => {
     setActiveCwd(cwd);
