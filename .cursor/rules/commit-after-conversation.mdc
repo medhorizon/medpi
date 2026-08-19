@@ -1,0 +1,13 @@
+---
+description: Commit this conversation's file changes before the final reply
+alwaysApply: true
+---
+
+# Commit after every conversation
+
+After finishing the user's request, if this conversation produced file changes, commit those files before the final response. Do not wait for the user to say "commit".
+
+- Stage and commit only files changed for this request. Never include unrelated user edits.
+- Do not commit `node_modules`, `.next`, credentials, sessions, runtime data, or generated artifacts.
+- Do not create an empty commit. Do not push unless the user asked.
+- Follow this repo's git protocol: status, diff, and log first; then add, commit, and verify.
