@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createJiti } from "jiti";
+
+const jiti = createJiti(import.meta.url);
+const { AgentSessionWrapper, withExtensionTools } = await jiti.import("./rpc-manager.ts");
 
 test("RPC session startup preloads extension-registered providers before restoring models", async () => {
   const source = await readFile(new URL("./rpc-manager.ts", import.meta.url), "utf8");
@@ -78,7 +82,7 @@ test("normal session teardown paths use graceful extension shutdown", async () =
   const trustRouteSource = await readFile(new URL("../app/api/project-trust/route.ts", import.meta.url), "utf8");
   const idleSource = source.slice(
     source.indexOf("  private resetIdleTimer"),
-    source.indexOf("  private persistBashOnlySession"),
+    source.indexOf("  ensurePersistedSession"),
   );
   const forkSource = source.slice(
     source.indexOf('case "fork"'),
@@ -92,7 +96,7 @@ test("normal session teardown paths use graceful extension shutdown", async () =
 });
 
 test("new-session route applies model scope during construction instead of follow-up commands", async () => {
-  const source = await readFile(new URL("../app/api/agent/new/route.ts", import.meta.url), "utf8");
+  const source = await readFile(new URL("./agent-session-create.ts", import.meta.url), "utf8");
 
   assert.match(source, /initialModel: \{ provider, modelId \}/);
   assert.match(source, /thinkingLevel: explicitThinkingLevel/);
@@ -108,6 +112,18 @@ test("RPC session startup persists explicit preferences without replaying setter
 
   assert.match(startupSource, /persistExplicitStartupPreferences\(/);
   assert.match(startupSource, /modelDefaultChanged\) invalidateModelsCache\(\)/);
+  assert.match(startupSource, /if \(persistStartupPreferences\)/);
+});
+
+test("ordinary new sessions keep legacy persistence while meetings persist empty sessions only", async () => {
+  const routeSource = await readFile(new URL("../app/api/agent/new/route.ts", import.meta.url), "utf8");
+  const createSource = await readFile(new URL("./agent-session-create.ts", import.meta.url), "utf8");
+  const meetingSource = await readFile(new URL("./group-meeting-server.ts", import.meta.url), "utf8");
+
+  assert.match(routeSource, /createNewAgentSession\(cwd, command\)/);
+  assert.match(createSource, /if \(options\.persistSession\) session\.ensurePersistedSession\(\)/);
+  assert.match(meetingSource, /persistStartupPreferences: false/);
+  assert.match(meetingSource, /persistSession: true/);
 });
 
 test("custom extension UI receives the fixed headless terminal facade", async () => {
@@ -130,4 +146,59 @@ test("reloading a session invalidates the models cache", async () => {
 
   assert.match(reloadSource, /await this\.inner\.reload\(\)/);
   assert.match(reloadSource, /this\.applyForcedEmptySystemPrompt\(\);\s*invalidateModelsCache\(\)/);
+});
+
+test("explicit tool names are an exact registered-tool intersection", () => {
+  const session = {
+    getAllTools: () => [{ name: "read" }, { name: "science_fetch" }, { name: "science_run" }],
+  };
+  assert.deepEqual(withExtensionTools(session, ["read", "science_fetch", "not_registered", "read"]), ["read", "science_fetch"]);
+
+  const activeCalls = [];
+  const wrapper = new AgentSessionWrapper({
+    ...session,
+    setActiveToolsByName: (toolNames) => activeCalls.push(toolNames),
+    agent: { state: {} },
+  }, ["read", "science_fetch"]);
+  wrapper.setActiveTools(["read"]);
+  assert.deepEqual(activeCalls, [["read", "science_fetch"]]);
+  assert.throws(() => wrapper.setActiveTools(["bash"]), /not allowed/);
+
+  const legacyCalls = [];
+  const legacyWrapper = new AgentSessionWrapper({
+    ...session,
+    setActiveToolsByName: (toolNames) => legacyCalls.push(toolNames),
+    agent: { state: {} },
+  });
+  legacyWrapper.setActiveTools(["read"]);
+  assert.deepEqual(legacyCalls, [["read", "science_fetch", "science_run"]]);
+});
+
+test("group-session restores use the server-side policy and never a frontend role", async () => {
+  const routes = [
+    "../app/api/agent/[id]/route.ts",
+    "../app/api/agent/[id]/events/route.ts",
+    "../app/api/sessions/[id]/auto-name/route.ts",
+  ];
+  for (const route of routes) {
+    const source = await readFile(new URL(route, import.meta.url), "utf8");
+    assert.match(source, /resolveGroupMeetingSessionPolicy\(id\)/);
+    assert.match(source, /fixedToolNames: meetingPolicy\.toolNames/);
+    assert.match(source, /fixedSystemPrompt: meetingPolicy\.systemPrompt/);
+    assert.doesNotMatch(source, /body\.role|command\.role/);
+  }
+});
+
+test("fixed meeting role prompts survive tool changes without duplication", () => {
+  const state = { systemPrompt: "Base system prompt" };
+  const wrapper = new AgentSessionWrapper({
+    getAllTools: () => [{ name: "read" }],
+    setActiveToolsByName: () => {},
+    agent: { state },
+  }, ["read"], "<medpi_virtual_biomed_lab_role>\nAuthoritative meeting role: phd-1.\n</medpi_virtual_biomed_lab_role>");
+  wrapper.setActiveTools(["read"]);
+  wrapper.setActiveTools(["read"]);
+  assert.match(state.systemPrompt, /Base system prompt/);
+  assert.equal((state.systemPrompt.match(/<medpi_virtual_biomed_lab_role>/g) ?? []).length, 1);
+  assert.match(state.systemPrompt, /Authoritative meeting role: phd-1/);
 });

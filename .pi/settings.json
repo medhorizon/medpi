@@ -1,0 +1,6 @@
+{
+  "packages": [
+    "../packages/science",
+    "../packages/lab"
+  ]
+}

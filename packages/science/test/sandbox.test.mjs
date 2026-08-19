@@ -74,6 +74,22 @@ test("none sandbox runs python and can write the project directory", async () =>
   await rm(projectRoot, { recursive: true, force: true })
 })
 
+test("one-shot sandbox commands receive EOF on stdin", async () => {
+  const projectRoot = await tempProject()
+  const runDir = await prepareRunDir(projectRoot)
+  const sandbox = new NoneSandbox()
+  const result = await sandbox.run({
+    projectRoot,
+    runDir,
+    command: ["python3", "-c", "import sys; sys.stdin.read(); print('eof')"],
+  })
+
+  assert.equal(result.status, "ok")
+  assert.equal(await readFile(path.join(runDir, "stdout.log"), "utf8"), "eof\n")
+  await cleanupRunDir(runDir)
+  await rm(projectRoot, { recursive: true, force: true })
+})
+
 test("abort kills the process group with no leftover children", async () => {
   const projectRoot = await tempProject()
   const runDir = await prepareRunDir(projectRoot)

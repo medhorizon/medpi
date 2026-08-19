@@ -1,12 +1,12 @@
 # 00. 极宽松沙箱设计（已确认）
 
-- **状态**：**已实现最小闭环（2026-08-08）**；决策见 §9。代码：`packages/science/src/sandbox/*`，工具：`science_run` / `science_rollback`
+- **状态**：**已实现并验证最小闭环**；代码：`packages/science/src/sandbox/*`、`packages/science/src/kernel/*`，工具：`science_run` / `science_rollback` / `science_kernel`
 - **日期**：2026-08-08
-- **关联**：`AGENTS.md`（任意代码执行保持禁用，直到沙箱与 permission owner 存在）；`docs/science-platform-migration.md` §7.3 P3 / §11 P3
+- **关联**：`AGENTS.md`（代码执行统一经 sandbox 与 permission owner）；`docs/science-platform-migration.md` §7.3 P3 / §11 P3
 
 ## 1. 背景与目标
 
-个人科研场景需要 AI 能执行 Python/R/bash 代码（当前 P3 能力保持禁用）。目标平台为 **Windows / Linux / macOS**，并支持**无沙箱启动**。用户的使用形态是"完全信任模式"：全盘可读、可写项目与环境目录、可联网、**资源配额无限**（生信需要大内存与长时运行）、无需每次询问；同时要求 **audit（审计/进度回查）→ 人工判断 → abort（中止）→ rollback（回滚）** 的完整闭环。
+个人科研场景需要 AI 能执行 Python/R/bash 代码。目标平台为 **Windows / Linux / macOS**，并支持**无沙箱启动**。用户的使用形态是"完全信任模式"：全盘可读、可写项目与环境目录、可联网、**资源配额无限**（生信需要大内存与长时运行）、无需每次询问；同时要求 **audit（审计/进度回查）→ 人工判断 → abort（中止）→ rollback（回滚）** 的完整闭环。Pi-native `science_kernel` 已提供持久 Python/R session，Pi-web 已提供薄 notebook cell-result renderer；两者均复用这条闭环。
 
 本方案目标是：以**最小代码**建立一个**极宽松沙箱**，在满足用户全部使用需求的同时，满足项目规则（沙箱 + permission owner 必须存在），并把 P3 其余门槛合并为一个**最小闭环**。
 
@@ -37,10 +37,10 @@
 | 项 | 结果 | 影响 |
 |---|---|---|
 | Ubuntu 24.04，内核 6.17 | — | — |
-| `kernel.apparmor_restrict_unprivileged_userns=1` | bwrap/unshare 默认被拒 | bwrap 需 1 行 sudo 或 AppArmor profile |
+| `kernel.apparmor_restrict_unprivileged_userns=1` | bwrap/unshare 默认被拒 | bwrap 硬边界测试可跳过；需要 bwrap 时再用 1 行 sudo 或 AppArmor profile 解锁 |
 | podman rootless | 可用（已有本地镜像） | 可选提供方；但 docker.io 拉镜像网络不通 |
 | python3.12 | 已装 | Python 可立即支持 |
-| R | 未装 | R 需求出现时再装、再加白名单 |
+| R | `science_kernel` 支持 | 用 `MEDPI_R` 显式指定 runtime；未设置时使用 PATH 中的 `Rscript` |
 
 > 注：Pi 自带 bash 工具当前即以宿主用户权限执行（无沙箱）。本沙箱针对的是**新增的 Python/R kernel/notebook 能力**（P3），不是给 Pi 现有 bash 加约束。
 
@@ -52,7 +52,7 @@
 
 | 提供方 | 平台 | 说明 |
 |---|---|---|
-| none（无沙箱） | 全部 | **默认**：直接以宿主权限运行（等价于 Pi 现有 bash）；audit/abort/rollback 闭环不受影响 |
+| none（无沙箱） | 全部 | **默认**：直接以宿主权限运行，拥有宿主权限（等价于 Pi 现有 bash）；audit/abort/rollback 闭环不受影响 |
 | bwrap | Linux | **可选**（用户显式启用时使用；71KB 可随包携带）；需一次解锁（1 行 sudo 或 setuid 安装） |
 | podman | Win/macOS/Linux | **可选**硬边界；需要 podman machine（非 Linux 平台为 Linux VM）+ 可用的镜像源 |
 
@@ -87,9 +87,20 @@
 
 - 不做数据外传防护（用户已接受全读 + 联网）；
 - 不做多租户/公网部署加固（P0/P1 保持搁置）；
-- 不做 R kernel（未安装，需求出现时再加）；
-- v1 不做 notebook UI；
-- 不迁移 MedHorizon 的 kernel/notebook 实现文件（只做新薄封装）。
+- 不复制 MedHorizon 的 kernel/notebook 实现文件；只允许新的薄 Pi-native 封装。
+- 不引入第二套 API、store 或 notebook document format。
+- 不把 MCP、Research Graph/GEPA 或 subagent scheduler 纳入本次 kernel/notebook 重开范围。
+
+## 8.1 已实现的 kernel / notebook 边界
+
+`science_kernel` 是唯一的 Python/R kernel 工具；它不是新的执行、权限或会话系统。一个持久内核只属于一个 **trusted project + Pi session + language** 三元组，且只暴露四个动作：`execute`、`status`、`interrupt`、`shutdown`。
+
+- 每次执行复用 `science_run` 的 sandbox provider、唯一 permission owner、audit、abort 与 rollback/checkpoint 语义；默认 `none` 表示代码拥有宿主权限，Linux 可由用户显式选择 `bwrap`。
+- 内核进程作为 detached process group 管理，以便 `interrupt`/abort 能终止整组进程；代码和内联输出有边界，完整的每-cell 输出写入对应日志并进入 provenance。session cleanup 会关闭该 session 的全部语言内核。
+- `MEDPI_PYTHON` 与 `MEDPI_R` 是 Python/R runtime 的显式覆盖变量；Python 未设置时使用 `python3`，R 未设置时使用 `Rscript`。覆盖值或所需 runtime 不可用时明确失败，不静默换用别的解释器。
+- Pi-web notebook 只渲染这些 kernel cell 的结果、状态、输出、日志/provenance、checkpoint/rollback 操作；它不是 `.ipynb` 编辑器，不保存或发明新的 notebook 文件格式，也不复制旧 MedHorizon kernel/notebook 代码。
+
+当前验证覆盖 Python/R state retention、输出截断后的继续执行、每-cell 日志与 code-hash provenance、status/shutdown/session cleanup，以及 abort 对 detached process group 子进程的清理。bwrap 硬边界测试保留为环境条件测试：当前 userns/AppArmor 配置不允许时会跳过。
 
 ## 9. 已确认决策（全部，2026-08-08）
 

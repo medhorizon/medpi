@@ -8,7 +8,8 @@
   },
   "workspaces": [
     "apps/web",
-    "packages/science"
+    "packages/science",
+    "packages/lab"
   ],
   "overrides": {
     "postcss": "8.5.26",

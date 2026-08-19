@@ -2,6 +2,7 @@
 
 import { memo, useState, useRef, useEffect, useMemo } from "react";
 import { MarkdownBody } from "./MarkdownBody";
+import { NotebookCellResult, parseNotebookCellDetails } from "./NotebookCellResult";
 import { copyText } from "@/lib/clipboard";
 import { useI18n } from "@/hooks/useI18n";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
@@ -711,6 +712,11 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
   const inputStr = JSON.stringify(block.input, null, 2);
   const isEditTool = isEditToolName(block.toolName);
   const resultDiff = result && !result.isError ? getResultDiff(result) : null;
+  const notebookDetails = block.toolName === "science_kernel" && result
+    ? parseNotebookCellDetails(result.details)
+    : null;
+
+  if (notebookDetails) return <NotebookCellResult details={notebookDetails} />;
 
   // Result display
   const resultText = result

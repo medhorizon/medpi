@@ -26,6 +26,11 @@ import {
 interface Props {
   session: SessionInfo | null;
   newSessionCwd: string | null;
+  /** Meeting panes reuse the full session protocol while suppressing write controls. */
+  readOnly?: boolean;
+  /** Removes wide single-chat chrome that does not fit inside a meeting pane. */
+  compact?: boolean;
+  onRuntimeStateChange?: (state: ChatRuntimeState) => void;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
   onSessionForked?: (newSessionId: string) => void;
@@ -37,6 +42,12 @@ interface Props {
   onSessionStatsPanelOpen?: () => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
   onOpenFile?: (filePath: string) => void;
+}
+
+export interface ChatRuntimeState {
+  status: "loading" | "error" | "idle" | "running";
+  model: { provider: string; modelId: string } | null;
+  error?: string;
 }
 
 function phaseLabel(phase: AgentPhase, t: (key: string, params?: Record<string, string | number>) => string): string | null {
@@ -170,7 +181,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children, t }: { mes
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ session, newSessionCwd, readOnly = false, compact = false, onRuntimeStateChange, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
   const { t } = useI18n();
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
@@ -185,11 +196,11 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   soundEnabledRef.current = soundEnabled;
   const soundedExtensionDialogIdRef = useRef<string | null>(null);
   const wrappedOnAgentEnd = useCallback(() => {
-    if (soundEnabledRef.current) {
+    if (!readOnly && soundEnabledRef.current) {
       playDoneSoundRef.current();
     }
     onAgentEnd?.();
-  }, [onAgentEnd]);
+  }, [readOnly, onAgentEnd]);
 
   // 稳定化 onEditContent 引用，配合 React.memo 防止历史消息重渲染
   const handleEditContent = useCallback((content: string) => {
@@ -219,16 +230,37 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   });
   const sessionBusy = agentRunning || bashRunning;
 
+  const runtimeStatus: ChatRuntimeState["status"] = loading
+    ? "loading"
+    : error
+      ? "error"
+      : sessionBusy
+        ? "running"
+        : "idle";
+  const runtimeStateKey = `${runtimeStatus}|${displayModelValue?.provider ?? ""}|${displayModelValue?.modelId ?? ""}|${error ?? ""}`;
+  const runtimeStateRef = useRef({ runtimeStatus, displayModelValue, error });
+  runtimeStateRef.current = { runtimeStatus, displayModelValue, error };
   useEffect(() => {
-    if (!extensionDialog || soundedExtensionDialogIdRef.current === extensionDialog.id) return;
+    const current = runtimeStateRef.current;
+    onRuntimeStateChange?.({
+      status: current.runtimeStatus,
+      model: current.displayModelValue,
+      ...(current.error ? { error: current.error } : {}),
+    });
+  }, [runtimeStateKey, onRuntimeStateChange]);
+
+  useEffect(() => {
+    if (readOnly || !extensionDialog || soundedExtensionDialogIdRef.current === extensionDialog.id) return;
     soundedExtensionDialogIdRef.current = extensionDialog.id;
     playDoneSoundRef.current();
-  }, [extensionDialog]);
+  }, [readOnly, extensionDialog]);
 
   // Register the abort handler for the global Esc shortcut
   useEffect(() => {
+    if (readOnly) return;
     registerAbortHandler(sessionBusy ? handleAbort : null);
-  }, [sessionBusy, handleAbort]);
+    return () => registerAbortHandler(null);
+  }, [readOnly, sessionBusy, handleAbort]);
 
   // --- Lazy-load historical messages ---
   // Only render the last N messages initially. When the user scrolls to the
@@ -305,9 +337,9 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   useEffect(() => () => { onContextUsageChange?.(null); }, [onContextUsageChange]);
 
   const onDrop = useCallback((files: File[]) => {
-    if (sessionBusy) return;
+    if (readOnly || sessionBusy) return;
     chatInputRef?.current?.addImages(files);
-  }, [sessionBusy, chatInputRef]);
+  }, [readOnly, sessionBusy, chatInputRef]);
 
   const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop);
 
@@ -406,12 +438,12 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     <div
       className="relative flex h-full min-w-0 flex-col overflow-hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragEnter={readOnly ? undefined : handleDragEnter}
+      onDragOver={readOnly ? undefined : handleDragOver}
+      onDragLeave={readOnly ? undefined : handleDragLeave}
+      onDrop={readOnly ? undefined : handleDrop}
     >
-      {isDragOver && !sessionBusy && (
+      {!readOnly && isDragOver && !sessionBusy && (
         <div className="pointer-events-none absolute inset-0 z-50 flex animate-[drop-zone-in_0.15s_ease_both] items-center justify-center bg-[rgba(37,99,235,0.06)] backdrop-blur-[1px]">
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             {[0, 0.8, 1.6].map((delay) => (
@@ -443,14 +475,14 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
         </div>
       )}
 
-      {extensionDialog && (
+      {!readOnly && extensionDialog && (
         <ExtensionDialog
           request={extensionDialog}
           onRespond={respondToExtensionUi}
         />
       )}
 
-      {extensionCustomUi && (
+      {!readOnly && extensionCustomUi && (
         <ExtensionCustomPanel
           request={extensionCustomUi}
           onInput={sendExtensionCustomInput}
@@ -579,11 +611,11 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                     cwd={messageCwd}
                     onOpenFile={onOpenFile}
                     entryId={entryIds[idx]}
-                    onFork={sessionBusy || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
+                    onFork={readOnly || sessionBusy || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
                     forking={forkingEntryId === entryIds[idx]}
-                    onNavigate={sessionBusy ? undefined : handleNavigate}
-                    prevAssistantEntryId={sessionBusy ? undefined : prevAssistantEntryId}
-                    onEditContent={handleEditContent}
+                    onNavigate={readOnly || sessionBusy ? undefined : handleNavigate}
+                    prevAssistantEntryId={readOnly || sessionBusy ? undefined : prevAssistantEntryId}
+                    onEditContent={readOnly ? undefined : handleEditContent}
                     showTimestamp={showTimestamp}
                     prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
                     sessionId={session?.id ?? sessionIdRef.current ?? undefined}
@@ -727,7 +759,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
             </div>
           </div>
         </div>
-        {isMobile ? null : (
+        {isMobile || compact ? null : (
           <ChatMinimap
             messages={messages}
             streamingMessage={streamState.streamingMessage}
@@ -742,15 +774,22 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
         <div
           style={{
             padding: `0 ${CHAT_COLUMN_PADDING}px`,
-            paddingRight: isMobile ? CHAT_COLUMN_PADDING : CHAT_INPUT_RIGHT_PADDING,
+            paddingRight: isMobile || compact ? CHAT_COLUMN_PADDING : CHAT_INPUT_RIGHT_PADDING,
           }}
         >
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
             <ExtensionWidgets widgets={belowEditorWidgets} />
           </div>
         </div>
-        {chatInputElement}
-        <ExtensionStatusBar statuses={extensionStatuses} />
+        {readOnly ? (
+          <div
+            role="status"
+            className="border-t border-border px-3 py-2 text-center text-xs text-text-muted"
+          >
+            {t("meeting.waitingForPi")}
+          </div>
+        ) : chatInputElement}
+        {!compact && <ExtensionStatusBar statuses={extensionStatuses} />}
       </div>
       </>
       )}

@@ -23,6 +23,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@medpi/lab": "file:../lab",
     "zod": "^4.1.5"
   },
   "peerDependencies": {

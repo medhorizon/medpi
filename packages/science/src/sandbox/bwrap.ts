@@ -1,6 +1,6 @@
 import path from "node:path"
-import { runDetachedProcess } from "./process.ts"
-import type { SandboxProvider, SandboxRunRequest, SandboxRunResult } from "./types.ts"
+import { runDetachedProcess, startDetachedProcess } from "./process.ts"
+import type { SandboxProcess, SandboxProvider, SandboxRunRequest, SandboxRunResult } from "./types.ts"
 
 export interface BwrapSandboxOptions {
   /** Extra paths that must be writable inside the sandbox (e.g. virtualenvs). */
@@ -69,6 +69,13 @@ export class BwrapSandbox implements SandboxProvider {
 
   run(request: SandboxRunRequest): Promise<SandboxRunResult> {
     return runDetachedProcess({
+      request,
+      argv: buildBwrapArgv(request, this.options),
+    })
+  }
+
+  start(request: SandboxRunRequest): SandboxProcess {
+    return startDetachedProcess({
       request,
       argv: buildBwrapArgv(request, this.options),
     })

@@ -46,9 +46,9 @@ MedHorizon 相对原生 Pi + pi-web 最有价值的优势，不是另一套 agen
 | 科学数据库连接器 | `backend/cli/src/science/connectors/` 有 41 个具体实现，覆盖文献、化学、基因组、蛋白、通路和 omics；统一 search/fetch contract | Pi 可调用通用网络工具，但没有这套领域归一化、来源目录和限流语义 | **迁移最小 8 个** |
 | 科学文件路由 | `backend/cli/src/file/science.ts` 有格式 manifest、magic/extension 判定和 read policy | pi-web 有通用文件 viewer，但不理解 HDF5/H5AD、FASTQ、VCF、PDB 等科学语义 | **迁移识别与有界文本预览** |
 | 专用科学 viewer | `frontend/workspace/src/science/renderers/` 含 Sequence/MSA、GenomeTrack、RDKit 2D、Mol* protein、LaTeX、PDF 等 | pi-web 的通用 image/PDF/text/markdown 预览不能替代结构、生信和化学可视化 | **暂不复制**；没有 React 消费方和性能预算 |
-| Python/R notebook | `science/kernel/*`、`tool/notebook.ts`、`tool/rkernel.ts` 具有生命周期和工具入口 | Pi 的 bash 能执行程序，但不是 notebook kernel、安全沙箱或资源治理层 | **不复制旧实现**；已建最小沙箱闭环（`science_run`/`science_rollback`，任意代码可执行）；notebook UI 等真实需求出现时再按 `science_run` 边界加 |
+| Python/R notebook | `science/kernel/*`、`tool/notebook.ts`、`tool/rkernel.ts` 具有生命周期和工具入口 | Pi 的 bash 能执行程序，但不是 notebook kernel、安全沙箱或资源治理层 | **已实现并验证薄的 Pi-native 实现**：`science_kernel` 按 trusted project + Pi session + language 持久化，只提供 execute/status/interrupt/shutdown，并复用 sandbox、permission owner、audit、abort 与 rollback/checkpoint 边界。Pi-web notebook 仅渲染 cell result，不是 `.ipynb` 编辑器；不复制旧实现或引入第二套 API/store/document format |
 | Research Stage/HITL | `session/stage.ts` 与旧 StagesPanel 支持研究阶段、审批和落地 | Pi 有通用交互/UI hooks，但没有科研阶段状态机 | **迁移状态语义**，UI 先用普通 tool result |
-| Provenance | `science/provenance/store.ts`、`review.ts`、`tool/provenance.ts` 建模 source/run/artifact/claim 和 evidence edges | Pi session 能记录 tool call，但不等于跨工件科研 lineage | **迁移轻量项目 DAG** |
+| Provenance | `science/provenance/store.ts`、`review.ts`、`tool/provenance.ts` 建模 source/run/artifact/claim 和 evidence edges | Pi session 能记录 tool call，但不等于跨工件科研 lineage | **迁移轻量项目 DAG**；当前消费者为 `science_search`/`science_fetch` 成功后自动写 source 节点，以及 `science_run`/`science_kernel` 写 run 节点；由后端从实际响应或运行内容生成，不接受模型声明的 content hash |
 | 科研审查 | reviewer prompt、Aletheia/专家代理与 evidence-oriented workflows | Pi 有 prompt/skill 机制，但没有 MedHorizon 的科研审查内容 | **迁移一个最小 reviewer prompt**；不复制代理 runtime |
 | Research Graph/GEPA | 独立 `research-graph/` 包含 FastAPI/SQLite、图 API、实验、GEPA、embedding、前端 canvas 和 sidecar | Pi session tree 不是科研知识图，也不提供 GEPA 实验管理 | **推迟**；当前本地 DAG 足以服务 3 个 provenance tools |
 | 科研 skills/专家代理 | 旧仓库有 293 个 `SKILL.md`，并有文献综述、评价和实验 critic | Pi 的 skills 生态更通用、分发更好，但未内置该领域内容 | **不整目录复制**；按真实研究任务逐个引入 |
@@ -290,7 +290,7 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 > 触发重新评估的硬条件：出现多用户共享、服务化部署（把应用放到服务器/容器供他人访问），或对 Web 接口健壮性提出明确要求时，两条 P1 应恢复推进。**P1-3（可重复交付：git 建档 + CI）与 P1-4（真实来源与模型验证）不受本说明影响，仍建议按原优先级推进**——前者保护个人代码资产不丢失，后者在开始真实使用模型与数据源时自然需要。
 | P2 | 科研产品消费层 | 目前 tool details 没有专用 React renderer；科学文件仍主要是 bounded text/metadata，binary 格式没有 deep parser/viewer。只有真实用例证明需要时再逐个添加 renderer，并冻结 bundle/WASM/worker/large-file 预算。 |
 | P2 | Provenance durability | 当前 DAG 是单进程原子 JSON 文件；仍无多进程 lock、fsync、签名、远端备份、快照/回放和版本迁移。规模或审计要求出现前不要引入第二个 graph store。 |
-| P3 | 任意代码与重型编排 | 最小沙箱闭环已落地（`science_run`/`science_rollback`：默认 none、可选 bwrap、permission owner、audit、abort、rollback；资源无限；redaction 按方案跳过）。R kernel、notebook UI、MCP sidecar、Research Graph/GEPA 和 subagent scheduler 仍禁用；勿复制旧 MedHorizon kernel 目录。 |
+| P3 | 任意代码与重型编排 | 最小沙箱闭环与 Python/R `science_kernel` 已落地并通过当前验证：默认 none、可选 bwrap、permission owner、audit、进程组 abort、checkpoint/rollback、session cleanup、每-cell bounded output/log/provenance；资源无限，redaction 按方案跳过。bwrap 依赖环境的硬边界测试可在当前 userns/AppArmor 条件下跳过。Pi-web 提供薄 notebook cell-result renderer，不是 `.ipynb` 编辑器；不得复制旧 MedHorizon 目录或绕过现有边界。MCP sidecar、Research Graph/GEPA 和 subagent scheduler 仍禁用。 |
 
 另外，任何曾在本地日志或会话输出中暴露的 Web/API 凭据都必须按已泄露处理并轮换；仓库和本文不记录凭据值。
 
@@ -324,7 +324,7 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 | Solid/Atlas workspace UI | pi-web 是唯一 Web 壳，框架与状态模型不兼容 | 只按需求重写薄 React 组件，不复制旧壳 |
 | 33 个其余 connectors | 没有当前 consumer；部分涉及 key、许可、临床或更复杂 schema | 真实研究用例、host policy、contract test 同时存在 |
 | Mol*/RDKit/IGV/MSA/Sequence viewer | bundle、WASM/worker、DOM 和大文件预算尚未设计 | 先有明确文件/tool consumer，再逐个迁移 |
-| Python/R kernel、notebook UI | 最小沙箱闭环已有；不做旧 kernel/notebook 整目录迁移 | 真实 notebook UI 需求出现，且继续走 `science_run` 边界 |
+| MedHorizon Python/R kernel、notebook UI 实现 | 已有 Pi-native `science_kernel` 与 cell-result renderer；不做旧 kernel/notebook 整目录迁移 | 后续扩展继续走既有 sandbox/permission/provenance 边界；不引入 `.ipynb` 编辑器或第二套运行时状态 |
 | Research Graph FastAPI/Vite sidecar | 引入 Python/SQLite/embedding/第二个图 store；当前 3 tools 无需它 | 本地 DAG 达到规模/查询瓶颈，且唯一图事实源迁移方案完成 |
 | GEPA/orchestrator/subagent scheduler | 依赖稳定的 permission、session、artifact 和 evaluation contract | 最小 agent/tool/browser 链路稳定后 |
 | MCP 实现 | Pi 已有扩展/package 能力，复制旧 MCP 会重复认证和工具事实源 | 确认 Pi 缺失的具体 MCP transport/auth 用例 |
@@ -357,7 +357,7 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 - Chrome DevTools/Playwright 的 DOM、console、network、abort/reconnect 和 accessibility 验证；
 - 8 个公共 source 的 live contract CI（当前 HTTP 安全测试使用真实本地 transport，避免外部 flaky test）；
 - 专用 Stage/provenance/scientific viewer React UI；
-- 多进程 provenance、notebook kernel UI、Research Graph sidecar。
+- 多进程 provenance、完整 `.ipynb` notebook 编辑器、Research Graph sidecar。
 
 ## 11. 下一步：只按消费方增加
 
@@ -391,7 +391,7 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 
 ### P3：高风险能力
 
-最小沙箱闭环见 `docs/plan/00-sandbox.md` 与 `packages/science/src/sandbox/*`（`science_run` / `science_rollback`）。仍不要迁移旧 MedHorizon kernel/notebook/MCP/Research Graph/GEPA/subagent 实现文件；新能力必须复用现有 sandbox + permission owner，并由真实消费方驱动。
+最小沙箱闭环与 `science_kernel` 见 `docs/plan/00-sandbox.md`、`packages/science/src/sandbox/*` 和 `packages/science/src/kernel/*`。Pi-web 的 notebook cell-result renderer 只消费现有 tool details。不要迁移旧 MedHorizon kernel/notebook 实现文件；`science_kernel` 继续复用现有 sandbox + permission owner。MCP/Research Graph/GEPA/subagent 实现文件仍不要迁移。
 
 ## 12. 审阅判定
 
@@ -403,4 +403,4 @@ Pi `0.84.1` 官方 changelog 明确将 packaged `undici` 更新到 `8.9.0`、`br
 
 当前不可以接受的声明是：
 
-> MedPi 已完成 MedHorizon 全功能重构、已具备 notebook kernel/Research Graph/科学 viewer，或已可安全公开生产部署。
+> MedPi 已完成 MedHorizon 全功能重构、已具备完整 `.ipynb` notebook 编辑器或 Research Graph/科学 viewer，或已可安全公开生产部署。

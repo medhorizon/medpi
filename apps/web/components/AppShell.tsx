@@ -12,15 +12,18 @@ import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { BranchNavigator } from "./BranchNavigator";
+import { GroupMeetingView } from "./GroupMeetingView";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
+import { useGroupMeeting } from "@/hooks/useGroupMeeting";
+import { useLabWorkflow } from "@/hooks/useLabWorkflow";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
-import { getInitialNavigation } from "@/lib/initial-navigation";
+import { buildMeetingNavigationUrl, getInitialNavigation } from "@/lib/initial-navigation";
 import {
   getDefaultRightPanelWidth,
   getRightPanelMaxWidth,
@@ -44,6 +47,11 @@ type AutoNameStatus =
   | { kind: "success" }
   | { kind: "error"; message: string };
 
+interface MeetingReturnState {
+  selectedSession: SessionInfo | null;
+  newSessionCwd: string | null;
+}
+
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
 const LANGUAGE_MENU_WIDTH = 176;
 
@@ -58,6 +66,12 @@ export function AppShell() {
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
+  const [meetingMode, setMeetingMode] = useState(() => initialNavigation.meetingId !== null);
+  const meetingModeRef = useRef(meetingMode);
+  const meetingReturnStateRef = useRef<MeetingReturnState | null>(
+    initialNavigation.meetingId ? { selectedSession: null, newSessionCwd: null } : null,
+  );
+  meetingModeRef.current = meetingMode;
   const [initialCwdStatus, setInitialCwdStatus] = useState<"idle" | "validating" | "ready" | "error">(
     () => initialNavigation.requestedCwd ? "validating" : "idle",
   );
@@ -264,6 +278,22 @@ export function AppShell() {
   const initialSessionId = initialNavigation.sessionId;
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
   const activeProjectRootRef = useRef<string | null>(null);
+  const meetingCwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
+  const {
+    meeting,
+    loading: meetingLoading,
+    creating: meetingCreating,
+    error: meetingError,
+    createMeeting,
+    leaveMeeting,
+  } = useGroupMeeting(meetingCwd, meetingMode ? initialNavigation.meetingId : null);
+  const {
+    workflow,
+    loading: workflowLoading,
+    error: workflowError,
+    refresh: refreshLabWorkflow,
+    action: actionLabWorkflow,
+  } = useLabWorkflow(meeting);
   // True once the initial ?session= URL param has been resolved (or confirmed absent)
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !initialSessionId);
   // Suppresses sessionKey bump in handleCwdChange during the initial URL restore
@@ -304,6 +334,53 @@ export function AppShell() {
     return () => controller.abort();
   }, [initialNavigation]);
 
+  const exitMeeting = useCallback((restorePreviousView: boolean) => {
+    const previous = restorePreviousView ? meetingReturnStateRef.current : null;
+    meetingModeRef.current = false;
+    meetingReturnStateRef.current = null;
+    setMeetingMode(false);
+    leaveMeeting();
+    setActiveTopPanel(null);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setSystemPrompt(null);
+    setSessionStats(null);
+    setContextUsage(null);
+
+    if (previous) {
+      setSelectedSession(previous.selectedSession);
+      setNewSessionCwd(previous.newSessionCwd);
+      setSessionKey((key) => key + 1);
+      router.replace(
+        previous.selectedSession
+          ? `?session=${encodeURIComponent(previous.selectedSession.id)}`
+          : "/",
+        { scroll: false },
+      );
+      return;
+    }
+
+    router.replace("/", { scroll: false });
+  }, [leaveMeeting, router]);
+
+  const handleMeetingToggle = useCallback(async () => {
+    if (meetingMode) {
+      exitMeeting(true);
+      return;
+    }
+    if (!meetingCwd || isMobile || meetingCreating) return;
+
+    meetingReturnStateRef.current = { selectedSession, newSessionCwd };
+    meetingModeRef.current = true;
+    setMeetingMode(true);
+    setActiveTopPanel(null);
+
+    const created = await createMeeting();
+    if (!created || !meetingModeRef.current) return;
+    setRefreshKey((key) => key + 1);
+    router.replace(buildMeetingNavigationUrl(created.meetingId, created.cwd), { scroll: false });
+  }, [createMeeting, exitMeeting, isMobile, meetingCreating, meetingCwd, meetingMode, newSessionCwd, router, selectedSession]);
+
   const handleCwdChange = useCallback((cwd: string | null, projectRoot?: string | null) => {
     setActiveCwd(cwd);
     // Skip if cwd is null (initial mount).
@@ -325,6 +402,7 @@ export function AppShell() {
     if (currentProject === newProject) {
       return;
     }
+    if (meetingModeRef.current) exitMeeting(false);
     // Close any session that belongs to a different project — it no longer
     // matches the selected project directory.
     setSelectedSession(null);
@@ -346,9 +424,10 @@ export function AppShell() {
     setActiveFileTabId(null);
     setRightPanelOpen(false);
     router.replace("/", { scroll: false });
-  }, [router, selectedSession]);
+  }, [exitMeeting, router, selectedSession]);
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
+    if (meetingModeRef.current) exitMeeting(false);
     setNewSessionCwd(null);
     setSelectedSession(session);
     setSessionKey((k) => k + 1);
@@ -366,9 +445,10 @@ export function AppShell() {
     if (!isRestore) {
       router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
-  }, [router, isMobile]);
+  }, [exitMeeting, router, isMobile]);
 
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
+    if (meetingModeRef.current) exitMeeting(false);
     setSelectedSession(null);
     setNewSessionCwd(cwd);
     setSessionKey((k) => k + 1);
@@ -378,7 +458,7 @@ export function AppShell() {
     setActiveTopPanel(null);
     if (isMobile) setSidebarOpen(false);
     router.replace("/", { scroll: false });
-  }, [router, isMobile]);
+  }, [exitMeeting, router, isMobile]);
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
@@ -414,6 +494,11 @@ export function AppShell() {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
   }, []);
+
+  const handleMeetingAgentEnd = useCallback(() => {
+    handleAgentEnd();
+    void refreshLabWorkflow();
+  }, [handleAgentEnd, refreshLabWorkflow]);
 
   const handleAutoName = useCallback(async () => {
     const sessionId = selectedSession?.id;
@@ -526,6 +611,10 @@ export function AppShell() {
     handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: selectedSession?.id ?? null });
   }, [handleOpenFile, selectedSession?.id]);
 
+  const handleOpenMeetingFile = useCallback((filePath: string, sessionId: string) => {
+    handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: sessionId });
+  }, [handleOpenFile]);
+
   const handleCloseFileTab = useCallback((tabId: string) => {
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
@@ -603,6 +692,20 @@ export function AppShell() {
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
+  const meetingButtonDisabled = meetingCreating || (!meetingMode && (!meetingCwd || isMobile));
+  const meetingButtonLabel = meetingCreating
+    ? translate("meeting.creating")
+    : meetingMode
+      ? translate("meeting.leave")
+      : translate("meeting.start");
+  const meetingButtonTitle = meetingError
+    ?? (meetingMode
+      ? translate("meeting.leave")
+      : isMobile
+        ? translate("meeting.desktopStartOnly")
+        : !meetingCwd
+          ? translate("meeting.selectProjectFirst")
+          : translate("meeting.start"));
 
   useEffect(() => {
     const syncWindowTitle = () => {
@@ -924,6 +1027,49 @@ export function AppShell() {
                <path d="M14 18h6" />
              </svg>
            </button>
+          <button
+            type="button"
+            onClick={() => void handleMeetingToggle()}
+            disabled={meetingButtonDisabled}
+            title={meetingButtonTitle}
+            aria-label={meetingButtonLabel}
+            aria-pressed={meetingMode}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              height: TOP_BAR_ICON_BUTTON_SIZE, padding: "0 11px",
+              background: meetingMode ? "var(--bg-selected)" : "none",
+              border: "none", borderRight: "1px solid var(--border)",
+              color: meetingError ? "#dc2626" : meetingMode ? "var(--text)" : "var(--text-muted)",
+              cursor: meetingButtonDisabled ? "not-allowed" : "pointer",
+              opacity: meetingButtonDisabled ? 0.45 : 1,
+              flexShrink: 0, fontSize: 11, whiteSpace: "nowrap",
+              transition: "color 0.12s, background 0.12s, opacity 0.12s",
+            }}
+            onMouseEnter={(event) => {
+              if (!meetingButtonDisabled) event.currentTarget.style.color = "var(--text)";
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.color = meetingError
+                ? "#dc2626"
+                : meetingMode
+                  ? "var(--text)"
+                  : "var(--text-muted)";
+            }}
+          >
+            {meetingCreating ? (
+              <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" opacity="0.25" />
+                <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="8" cy="8" r="3" /><circle cx="17" cy="9" r="2.5" />
+                <path d="M2.5 20c.4-4 2.2-6 5.5-6s5.1 2 5.5 6" />
+                <path d="M14 15c3.8-.8 6.4 1 7 5" />
+              </svg>
+            )}
+            {!isMobile && <span>{meetingButtonLabel}</span>}
+          </button>
           {showChat && projectTrust?.requiresTrust && !projectTrust.trusted && (
             <button
               type="button"
@@ -967,7 +1113,7 @@ export function AppShell() {
               {!isMobile && <span>{translate("trust.resourcesNotLoaded")}</span>}
             </button>
           )}
-          {showChat && (
+          {showChat && !meetingMode && (
             <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
               <button
                 onClick={handleViewFullHistory}
@@ -1136,7 +1282,7 @@ export function AppShell() {
             </div>
           )}
           {/* Session stats — right-aligned in top bar */}
-          {showChat && (sessionStats || contextUsage) && (() => {
+          {showChat && !meetingMode && (sessionStats || contextUsage) && (() => {
              const tokens = sessionStats?.tokens;
             const c = sessionStats?.cost ?? 0;
             const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
@@ -1478,7 +1624,20 @@ export function AppShell() {
 
         {/* Chat content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-          {showChat ? (
+          {meetingMode ? (
+            <GroupMeetingView
+              meeting={meeting}
+              loading={meetingLoading || meetingCreating || initialCwdStatus === "validating"}
+              error={meetingError}
+              modelsRefreshKey={modelsRefreshKey}
+              onAgentEnd={handleMeetingAgentEnd}
+              onOpenFile={handleOpenMeetingFile}
+              workflow={workflow}
+              workflowLoading={workflowLoading}
+              workflowError={workflowError}
+              onWorkflowAction={actionLabWorkflow}
+            />
+          ) : showChat ? (
             <ChatWindow
               key={sessionKey}
               session={selectedSession}

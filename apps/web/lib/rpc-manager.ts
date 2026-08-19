@@ -85,9 +85,10 @@ export interface RpcSessionStartOptions {
   toolNames?: string[];
   initialModel?: { provider: string; modelId: string };
   thinkingLevel?: ThinkingLevel;
+  persistStartupPreferences?: boolean;
+  fixedToolNames?: string[];
+  fixedSystemPrompt?: string;
 }
-
-const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 // Extensions require a complete Theme, while the web UI applies its own styling.
 class PlainTextTheme extends Theme {
@@ -116,17 +117,25 @@ class PlainTextTheme extends Theme {
 
 const PLAIN_TEXT_THEME = new PlainTextTheme();
 const CUSTOM_UI_KEYBINDINGS = new TuiKeybindingsManager(TUI_KEYBINDINGS);
+const CODING_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
-function withExtensionTools(session: AgentSessionLike, toolNames: string[]): string[] {
+export function withExtensionTools(session: AgentSessionLike, toolNames: string[]): string[] {
   if (toolNames.length === 0) return [];
 
-  const codingToolNames = new Set(CODING_TOOL_NAMES);
-  const extensionToolNames = session
+  const availableToolNames = new Set(session
     .getAllTools()
     .map((t) => t.name)
-    .filter((name) => !codingToolNames.has(name));
+  );
 
-  return [...new Set([...toolNames, ...extensionToolNames])];
+  return [...new Set(toolNames)].filter((name) => availableToolNames.has(name));
+}
+
+function withLegacyPresetTools(session: AgentSessionLike, toolNames: string[]): string[] {
+  if (toolNames.length === 0) return [];
+  const extensionToolNames = session.getAllTools()
+    .map((tool) => tool.name)
+    .filter((name) => !CODING_TOOL_NAMES.has(name));
+  return withExtensionTools(session, [...toolNames, ...extensionToolNames]);
 }
 
 // ============================================================================
@@ -152,7 +161,13 @@ export class AgentSessionWrapper {
   private shutdownPromise: Promise<void> | null = null;
   private _alive = true;
 
-  constructor(public readonly inner: AgentSessionLike) {}
+  private readonly fixedToolNames: string[] | null;
+  private readonly fixedSystemPrompt: string | null;
+
+  constructor(public readonly inner: AgentSessionLike, fixedToolNames?: string[], fixedSystemPrompt?: string) {
+    this.fixedToolNames = fixedToolNames ? [...new Set(fixedToolNames)] : null;
+    this.fixedSystemPrompt = fixedSystemPrompt?.trim() || null;
+  }
 
   get sessionId(): string {
     return this.inner.sessionId;
@@ -190,6 +205,22 @@ export class AgentSessionWrapper {
   setForceEmptySystemPrompt(force: boolean): void {
     this.forceEmptySystemPrompt = force;
     this.applyForcedEmptySystemPrompt();
+  }
+
+  setActiveTools(toolNames: string[]): void {
+    if (this.fixedToolNames && toolNames.some((name) => !this.fixedToolNames!.includes(name))) {
+      throw new Error("Tool is not allowed for this group meeting session");
+    }
+    const activeToolNames = this.fixedToolNames ?? toolNames;
+    this.setForceEmptySystemPrompt(activeToolNames.length === 0);
+    this.inner.setActiveToolsByName(this.fixedToolNames
+      ? withExtensionTools(this.inner, activeToolNames)
+      : withLegacyPresetTools(this.inner, activeToolNames));
+    this.applyForcedEmptySystemPrompt();
+  }
+
+  private restoreFixedTools(): void {
+    if (this.fixedToolNames) this.setActiveTools(this.fixedToolNames);
   }
 
   beginExtensionBinding(options: ExtensionBindingOptions = {}): void {
@@ -244,6 +275,7 @@ export class AgentSessionWrapper {
         this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
       }
       this.extensionsBound = true;
+      this.restoreFixedTools();
       this.applyForcedEmptySystemPrompt();
       console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
     })().catch((err) => {
@@ -281,9 +313,18 @@ export class AgentSessionWrapper {
   }
 
   private applyForcedEmptySystemPrompt(): void {
-    if (this.forceEmptySystemPrompt && this.inner.agent.state) {
-      this.inner.agent.state.systemPrompt = "";
+    const state = this.inner.agent.state;
+    if (!state) return;
+    if (this.forceEmptySystemPrompt) {
+      state.systemPrompt = "";
+      return;
     }
+    if (!this.fixedSystemPrompt) return;
+    const marker = "<medpi_virtual_biomed_lab_role>";
+    const current = state.systemPrompt ?? "";
+    const markerIndex = current.indexOf(marker);
+    const base = (markerIndex >= 0 ? current.slice(0, markerIndex) : current).trimEnd();
+    state.systemPrompt = base ? `${base}\n\n${this.fixedSystemPrompt}` : this.fixedSystemPrompt;
   }
 
   private emit(event: AgentEvent): void {
@@ -303,18 +344,24 @@ export class AgentSessionWrapper {
     }, 10 * 60 * 1000);
   }
 
-  private persistBashOnlySession(): void {
+  ensurePersistedSession(): void {
     const manager = this.inner.sessionManager;
     const sessionFile = manager.getSessionFile();
-    if (!sessionFile || existsSync(sessionFile)) return;
+    if (!sessionFile) return;
 
     const header = manager.getHeader();
     if (!header) return;
 
-    const content = [header, ...manager.getEntries()]
-      .map((entry) => JSON.stringify(entry))
-      .join("\n") + "\n";
-    writeFileSync(sessionFile, content, { encoding: "utf8", flag: "wx" });
+    if (!existsSync(sessionFile)) {
+      const content = [header, ...manager.getEntries()]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n";
+      try {
+        writeFileSync(sessionFile, content, { encoding: "utf8", flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
 
     // Pi normally delays the first flush until an assistant message exists.
     // A leading shell command has no assistant message, so mark this SDK
@@ -576,10 +623,7 @@ export class AgentSessionWrapper {
       }
 
       case "set_tools": {
-        const toolNames = command.toolNames as string[];
-        this.setForceEmptySystemPrompt(toolNames.length === 0);
-        this.inner.setActiveToolsByName(withExtensionTools(this.inner, toolNames));
-        this.applyForcedEmptySystemPrompt();
+        this.setActiveTools(command.toolNames as string[]);
         return null;
       }
 
@@ -592,6 +636,7 @@ export class AgentSessionWrapper {
         if (typeof this.inner.bindExtensions !== "function") {
           this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
         }
+        this.restoreFixedTools();
         this.applyForcedEmptySystemPrompt();
         invalidateModelsCache();
         return { success: true };
@@ -629,7 +674,7 @@ export class AgentSessionWrapper {
         notifyRunningChange();
         try {
           const result = await execution;
-          this.persistBashOnlySession();
+          this.ensurePersistedSession();
           return result;
         } finally {
           this.resetIdleTimer();
@@ -1168,7 +1213,8 @@ export async function startRpcSession(
   cwd: string | undefined,
   options: RpcSessionStartOptions = {},
 ): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
-  const { toolNames, initialModel, thinkingLevel } = options;
+  const { toolNames: requestedToolNames, initialModel, thinkingLevel, persistStartupPreferences = true, fixedToolNames, fixedSystemPrompt } = options;
+  const toolNames = fixedToolNames ?? requestedToolNames;
   const registry = getRegistry();
   const locks = getLocks();
 
@@ -1241,30 +1287,26 @@ export async function startRpcSession(
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
     });
 
-    const persistedPreferences = await persistExplicitStartupPreferences(
-      services.settingsManager,
-      {
-        ...(initialModel ? { model: initialModel } : {}),
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-      },
-      {
-        ...(inner.model
-          ? { model: { provider: inner.model.provider, modelId: inner.model.id } }
-          : {}),
-        thinkingLevel: inner.thinkingLevel,
-        supportsThinking: inner.supportsThinking(),
-      },
-    );
-    if (persistedPreferences.modelDefaultChanged) invalidateModelsCache();
-
-    // If specific tool names were requested (non-empty), set the active tools to the
-    // requested builtin coding tools PLUS all extension/package tools, so installed
-    // extensions stay usable in Pi Web just like in the `pi` CLI.
-    if (toolNames && toolNames.length > 0) {
-      inner.setActiveToolsByName(withExtensionTools(inner, toolNames));
+    if (persistStartupPreferences) {
+      const persistedPreferences = await persistExplicitStartupPreferences(
+        services.settingsManager,
+        {
+          ...(initialModel ? { model: initialModel } : {}),
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+        },
+        {
+          ...(inner.model
+            ? { model: { provider: inner.model.provider, modelId: inner.model.id } }
+            : {}),
+          thinkingLevel: inner.thinkingLevel,
+          supportsThinking: inner.supportsThinking(),
+        },
+      );
+      if (persistedPreferences.modelDefaultChanged) invalidateModelsCache();
     }
 
-    const wrapper = new AgentSessionWrapper(inner);
+    const wrapper = new AgentSessionWrapper(inner, fixedToolNames, fixedSystemPrompt);
+    if (toolNames !== undefined) wrapper.setActiveTools(toolNames);
     // When all tools are disabled, clear the system prompt entirely.
     // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
     // keep this forced after extension resource discovery and reloads as well.

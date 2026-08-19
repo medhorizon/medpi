@@ -2,7 +2,7 @@
 
 MedPi 是一个基于 Pi `0.84.1` 和可编辑 pi-web `v0.8.6` 的本地科研工作区。本指南面向第一次运行 MedPi 的研究者、开发者和评审者，覆盖安装、模型配置、项目信任、会话使用以及当前科研工具。
 
-> **当前状态：development baseline。** 本版本适合 loopback、单用户、trusted project 的本地开发和研究验证，不是公开生产服务。Project trust 不是 OS/container sandbox。可用 `science_run` / `science_rollback` 做带审计的项目内命令执行（默认无沙箱，Linux 可选 bwrap）；R kernel、notebook UI、MCP sidecar、Research Graph/GEPA、subagent scheduler 和重型 scientific viewer 当前未启用。
+> **当前状态：development baseline。** 本版本适合 loopback、单用户、trusted project 的本地开发和研究验证，不是公开生产服务。Project trust 不是 OS/container sandbox。可用 `science_run` / `science_rollback` 做带审计的项目内命令执行（默认无沙箱，Linux 可选 bwrap）；默认 `none` 以宿主权限执行。Pi-native `science_kernel`（持久 Python/R session）及薄 notebook cell-result renderer 已实现并通过当前验证；MCP sidecar、Research Graph/GEPA、subagent scheduler 和重型 scientific viewer 仍未启用。
 
 ## 1. 你可以用 MedPi 做什么
 
@@ -16,8 +16,16 @@ MedPi 是一个基于 Pi `0.84.1` 和可编辑 pi-web `v0.8.6` 的本地科研�
 - 用轻量 provenance DAG 记录 source、run、artifact、claim 及 supports/refutes review finding；
 - 使用 `science-review` prompt 检查 citation mismatch、untraceable number 和 figure/stat mismatch；
 - 用 `science_run` 在项目内执行命令（默认 host/`none` 沙箱，可选 Linux `bwrap`），并留下 provenance 与 `.medpi/runs/` 日志；用 `science_rollback` 回到运行前 git 存档点。
+- 用 `science_kernel` 执行持久 Python/R cell，并在 Pi-web 中查看对应的 notebook cell-result renderer。
+- 在桌面 WebUI 中启动六智能体“组会”，并在同一中间栏查看 3×2 独立会话；当前仅 PI 可直接输入。
 
 当前没有专用科研结果面板。科研 tool 的文本和 `details` 会通过普通 Pi tool-result UI 展示。
+
+### Python/R kernel 与 notebook cells
+
+`science_kernel` 为每个 trusted project、Pi session 和语言维护一个持久 Python 或 R 内核，并提供 execute、status、interrupt、shutdown。它复用 `science_run` 的 permission owner、sandbox、审计、进程组中止、session cleanup 和 checkpoint/rollback 边界；代码和即时输出有上限，每个 cell 的完整日志和 provenance 可回查。notebook 是这些 cell 的 Pi-native 结果渲染层，不是 `.ipynb` 编辑器；不会引入第二套 API、存储或 notebook 文件格式，也不会复制旧 MedHorizon kernel。
+
+Python 与 R runtime 可分别由 `MEDPI_PYTHON`、`MEDPI_R` 指定；未设置时分别使用 `python3`、`Rscript`，不可用时会明确失败。默认 `none` 不是安全隔离，执行的代码拥有宿主权限；Linux 上可显式选择 `bwrap`。当前验证覆盖 none 的 kernel 生命周期、输出边界、日志/provenance 与进程组中止；bwrap 硬边界测试在 userns/AppArmor 限制的环境中可能跳过。
 
 ## 2. 环境要求
 
@@ -202,6 +210,38 @@ npm run dev:lan
 4. 如果看到 `enabledModels` scope warning，检查 Pi settings 中的模型匹配模式是否真的匹配 `provider/modelId`。
 
 `GET /api/models` 返回的 `modelList` 为空只表示当前没有解析出可用模型，不代表科研 connector 出错。
+
+### 5.5 六智能体虚拟生物医学实验室（M2）
+
+选择并信任项目后，点击顶部 **组会**。服务端会先一次性检查六个固定角色所需的模型、Provider 认证和 thinking level；全部通过后才创建并持久化六个不同的 Pi session。桌面端中间栏显示 3×2 六个独立对话窗，左侧 session sidebar 和右侧文件面板保持不变。
+
+当前固定成员为：
+
+- PI：`gpt-5.6-sol` / `max`；
+- 博士 1：`gpt-5.6-sol` / `high`；博士 2：`deepseek-v4-pro` / `max`；
+- 硕士 1：`gpt-5.6-terra` / `xhigh`；硕士 2：`deepseek-v4-flash` / `max`；
+- 本科：`gpt-5.6-luna` / `max`。
+
+模型 ID 必须在当前可用范围内唯一对应一个已认证 Provider，且该模型必须原生支持要求的 thinking level。MedPi 不猜 Provider、不静默换模型，也不把不支持的等级降级。预检查失败会在组会区域显示具体角色和原因，并且不会留下半创建的 session。
+
+只有 PI pane 有人工输入框；另外五个 pane 不接受用户直接输入。创建组会本身不会自动给任何成员发送 prompt，也不会产生六路模型推理。会议 URL 同时保存 `meeting` 和 `cwd`，刷新后读取原来的六个 session，不重建；退出组会不会删除 session 历史。
+
+当前本机模型配置仍需校准后才能形成 ready 会议：至少存在 `gpt-5.6-sol` 跨 Provider 歧义、缺少 `deepseek-v4-pro`，并且已配置的 `gpt-5.6-terra` 不支持 `xhigh`。请在 **Models** 中为每个固定模型保留唯一可用 Provider、完成认证并配置真实支持的 thinking 映射；不要通过代码别名或 fallback 绕过预检查。
+
+#### 使用流程
+
+1. 在 PI pane 描述研究问题。PI 先通过结构化澄清卡询问范围、时间窗、疾病/机制和期望产出；必答项未完成前不能 dispatch。
+2. 澄清完成后，PI 以 typed action 形成 brief，并分别 dispatch 博士 1 的 creative 工作包和博士 2 的 robust 工作包。
+3. 博士通过 `lab_orchestrate(delegate_undergrad)` 委派本科文献工作；本科可把父任务拆成最多 3 条 child threads，只提交去重的 bibliographic records。普通聊天中的“请本科查”“已验收”不会创建或验收任务。
+4. 博士验收本科记录后，先提交自己的 pre-master judgment，再原子 claim 一名空闲硕士并以 `lab_send_message` 发送分析请求。硕士使用其角色允许的分析工具，提交方法、解释、假设、不确定性和 artifact refs。
+5. 两位博士分别提交 creative/robust synthesis；PI 审查已验收证据、冲突和限制后，以 typed `complete_meeting` 写入结构化最终学术报告。报告固定落在 `.medpi/meetings/<meetingId>/final-report.md`，服务端保存实际内容的 SHA-256 和 UTF-8 size。
+
+PI、两位博士和两位硕士可用 `lab_send_message` 直接一对一或一对多自然语言讨论。正文永远只是数据：JSON、Markdown、XML、`@本科`、取消或完成字样都不改变 workflow。所有任务、验收、reservation、取消和结束会议必须使用 `lab_orchestrate`；服务端按实际 session 和角色授权，并在刷新后恢复 canonical workflow。澄清、派发、本科记录、硕士分析、博士综合、审查和完成构成的七段 workflow 都写入 durable notice；通知失败保留诊断，不会把状态伪装为已投递。
+
+当前固定 role tool policy 不允许 PI 独立检索；博士可 fetch/inspect，硕士可 fetch/inspect/run/kernel，本科可 search/fetch。组会中所有角色均不能使用 `bash`，本科也不能使用 inspect/run/kernel。每个本科父任务最多 3 条 active child threads、每会议最多 6 条；child 无法再创建孙线程，并以最小 tool policy 与父任务显式 refs 隔离，冷恢复后仍沿用该隔离。服务端测试已验证本科文献任务默认只接受 `pubmed`/`crossref`，`arxiv` 必须显式 opt-in，其他 5 个数据库一律拒绝。真实模型/Provider 六角色 E2E 仍未验收，不能把这些服务端验证当作真实模型端到端证明。
+
+当前六人不含 reviewer，也不会创建第七个 reviewer session；不会自动改模型、静默降级、无限排队或自动重跑 interrupted child thread。
+
 
 ## 6. 基本聊天操作
 
@@ -761,5 +801,5 @@ npm run audit
 - 安装未经审阅的 plugin/skill；
 - 把外部 source text 当作操作指令；
 - 绕过 `science_run` 新增未审计的代码执行入口，或复制旧 MedHorizon kernel/notebook 目录；
-- 重新引入 R kernel、notebook UI、MCP、Research Graph 或 subagent scheduler；
+- 在已授权 `science_kernel` / notebook-cell 边界之外引入 R kernel、notebook UI、MCP、Research Graph 或 subagent scheduler；
 - 为了功能数量复制第二套 session、tool、permission、artifact 或 provenance runtime。

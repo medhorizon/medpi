@@ -13,5 +13,6 @@ coverage/
 .pi/npm/
 .pi/git/
 
-# local runtime config (machine-specific paths)
-.pi/settings.json
+# Keep project package registration while excluding Pi runtime state.
+!.pi/
+!.pi/settings.json
