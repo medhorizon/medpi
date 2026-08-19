@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { GroupMeetingError, readGroupMeeting, updateGroupMeetingSettings } from "@/lib/group-meeting-server";
+import { deleteGroupMeeting, GroupMeetingError, readGroupMeeting, updateGroupMeetingSettings } from "@/lib/group-meeting-server";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
@@ -59,6 +59,32 @@ export async function PATCH(
         code: error.code,
         ...(error.role ? { role: error.role } : {}),
       }, { status });
+    }
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  req: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    if (!isApiRequestAllowed(req)) {
+      return NextResponse.json({ error: "Untrusted API request", code: "untrusted_request" }, { status: 403 });
+    }
+    const cwd = new URL(req.url).searchParams.get("cwd")?.trim() ?? "";
+    if (!cwd) return NextResponse.json({ error: "cwd is required", code: "invalid_cwd" }, { status: 400 });
+    const { id } = await context.params;
+    await deleteGroupMeeting(cwd, id);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    if (error instanceof GroupMeetingError) {
+      const status = error.code === "access_denied" || error.code === "project_untrusted"
+        ? 403
+        : error.code === "meeting_not_found"
+          ? 404
+          : 400;
+      return NextResponse.json({ error: error.message, code: error.code }, { status });
     }
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

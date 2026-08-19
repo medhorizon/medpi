@@ -79,10 +79,12 @@ export function useGroupMeeting(cwd: string | null, meetingId: string | null = n
   const [loading, setLoading] = useState(Boolean(cwd && meetingId));
   const [creating, setCreating] = useState(false);
   const [configuring, setConfiguring] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generationRef = useRef(0);
   const openingRef = useRef(false);
   const configuringRef = useRef(false);
+  const deletingRef = useRef(false);
 
   const activeMeetingIdRef = useRef<string | null>(meetingId);
 
@@ -228,16 +230,43 @@ export function useGroupMeeting(cwd: string | null, meetingId: string | null = n
     }
   }, [cwd, meeting]);
 
+  const deleteMeeting = useCallback(async () => {
+    if (!cwd || !meeting || deletingRef.current) return false;
+    deletingRef.current = true;
+    setDeleting(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/meetings/${encodeURIComponent(meeting.meetingId)}?cwd=${encodeURIComponent(cwd)}`,
+        { method: "DELETE" },
+      );
+      const payload: unknown = await response.json();
+      if (!response.ok) throw new Error(responseError(payload, response.status));
+      generationRef.current += 1;
+      activeMeetingIdRef.current = null;
+      setMeeting(null);
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    } finally {
+      deletingRef.current = false;
+      setDeleting(false);
+    }
+  }, [cwd, meeting]);
+
   return {
     meeting,
     loading,
     creating,
     configuring,
+    deleting,
     error,
     loadMeeting,
     refresh,
     openMeeting,
     leaveMeeting,
+    deleteMeeting,
     updateMeetingSettings,
   };
 }

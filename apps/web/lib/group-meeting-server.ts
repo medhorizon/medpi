@@ -22,7 +22,7 @@ import { resolveVisibleModels } from "./model-scope";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { bindLabWorkflowRuntime, resolveLabWorkflowChildSessionPolicy } from "./lab-workflow";
 import { getRpcSession, startRpcSession } from "./rpc-manager";
-import { resolveSessionPath } from "./session-reader";
+import { invalidateSessionListCache, invalidateSessionPathCache, resolveSessionPath } from "./session-reader";
 import { resolveProject } from "./worktree";
 
 bindLabWorkflowRuntime();
@@ -48,6 +48,11 @@ interface MeetingSettingsDependencies {
     settings: GroupMeetingMemberSettings,
   ) => Promise<{ provider: string; modelId: string; thinkingLevel: string | undefined }>;
   visibleModels?: readonly Model<Api>[];
+}
+
+interface MeetingDeletionDependencies {
+  agentDir?: string;
+  deleteSession?: (sessionId: string) => Promise<boolean>;
 }
 
 export interface GroupMeetingSessionPolicy {
@@ -308,6 +313,70 @@ export async function readGroupMeeting(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function readWorkflowChildSessionIds(
+  meeting: GroupMeeting,
+  agentDir: string,
+): Promise<string[]> {
+  try {
+    const value = JSON.parse(
+      await readFile(join(meetingDirectory(meeting.cwd, agentDir), `${meeting.meetingId}.workflow.json`), "utf8"),
+    ) as { meetingId?: unknown; cwd?: unknown; undergradThreads?: unknown };
+    if (value.meetingId !== meeting.meetingId || value.cwd !== meeting.cwd || !Array.isArray(value.undergradThreads)) {
+      throw new GroupMeetingError("Invalid lab workflow metadata", "invalid_metadata");
+    }
+    return value.undergradThreads.map((thread) => {
+      const sessionId = typeof thread === "object" && thread !== null && "sessionId" in thread
+        ? (thread as { sessionId?: unknown }).sessionId
+        : null;
+      if (typeof sessionId !== "string" || !sessionId) {
+        throw new GroupMeetingError("Invalid undergraduate session metadata", "invalid_metadata");
+      }
+      return sessionId;
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function deleteMeetingSession(sessionId: string): Promise<boolean> {
+  const filePath = await resolveSessionPath(sessionId);
+  if (!filePath) return false;
+  await getRpcSession(sessionId)?.shutdown();
+  await unlink(filePath);
+  invalidateSessionPathCache(sessionId);
+  invalidateSessionListCache();
+  return true;
+}
+
+export async function deleteGroupMeeting(
+  requestedCwd: string,
+  meetingId: string,
+  dependencies: MeetingDeletionDependencies = {},
+): Promise<void> {
+  const agentDir = dependencies.agentDir ?? getAgentDir();
+  const meeting = await readGroupMeeting(requestedCwd, meetingId, agentDir);
+  if (!meeting) throw new GroupMeetingError("Meeting not found", "meeting_not_found");
+
+  const childSessionIds = await readWorkflowChildSessionIds(meeting, agentDir);
+  const memberSessionIds = meeting.members.flatMap((member) => member.sessionId ? [member.sessionId] : []);
+  const deleteSession = dependencies.deleteSession ?? deleteMeetingSession;
+  for (const sessionId of new Set([...childSessionIds, ...memberSessionIds])) {
+    await deleteSession(sessionId);
+  }
+
+  const directory = meetingDirectory(meeting.cwd, agentDir);
+  for (const path of [
+    join(directory, `${meeting.meetingId}.workflow.json`),
+    join(directory, "lab-messages", `${meeting.meetingId}.json`),
+  ]) {
+    await unlink(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
+  await unlink(meetingPath(meeting.cwd, meeting.meetingId, agentDir));
 }
 
 async function applyMemberSettings(

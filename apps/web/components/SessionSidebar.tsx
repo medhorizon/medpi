@@ -77,6 +77,9 @@ interface Props {
   selectedSessionId: string | null;
   onSelectSession: (session: SessionInfo, isRestore?: boolean) => void;
   onNewSession?: (sessionId: string, cwd: string) => void;
+  onDeleteMeeting?: () => void;
+  meetingDeleteDisabled?: boolean;
+  meetingDeleting?: boolean;
   initialSessionId?: string | null;
   skipInitialProjectSelection?: boolean;
   onInitialRestoreDone?: () => void;
@@ -383,7 +386,7 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, onDeleteMeeting, meetingDeleteDisabled = false, meetingDeleting = false, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -883,6 +886,43 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <PiWebTitle />
           <div style={{ display: "flex", gap: 6 }}>
+            {onDeleteMeeting && (
+              <button
+                type="button"
+                onClick={onDeleteMeeting}
+                disabled={meetingDeleteDisabled}
+                title={meetingDeleting ? t("meeting.deleting") : t("meeting.delete")}
+                aria-label={meetingDeleting ? t("meeting.deleting") : t("meeting.delete")}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 32, height: 32, padding: 0,
+                  background: "var(--bg-hover)",
+                  border: "1px solid var(--border)",
+                  color: meetingDeleteDisabled ? "var(--text-dim)" : "#dc2626",
+                  cursor: meetingDeleteDisabled ? "not-allowed" : "pointer",
+                  borderRadius: 7,
+                  flexShrink: 0,
+                  opacity: meetingDeleteDisabled ? 0.55 : 1,
+                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                }}
+                onMouseEnter={(event) => {
+                  if (meetingDeleteDisabled) return;
+                  event.currentTarget.style.background = "rgba(220,38,38,0.1)";
+                  event.currentTarget.style.borderColor = "rgba(220,38,38,0.35)";
+                }}
+                onMouseLeave={(event) => {
+                  event.currentTarget.style.background = "var(--bg-hover)";
+                  event.currentTarget.style.borderColor = "var(--border)";
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6M14 11v6" />
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                </svg>
+              </button>
+            )}
             <button
               onClick={handleNewSession}
               disabled={!selectedCwd}

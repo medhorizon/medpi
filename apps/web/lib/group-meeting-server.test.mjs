@@ -12,6 +12,7 @@ const { allowFileRoot } = await jiti.import("./file-access.ts");
 const { AgentSessionWrapper } = await jiti.import("./rpc-manager.ts");
 const {
   createGroupMeetingFromRoster,
+  deleteGroupMeeting,
   GroupMeetingError,
   getGroupMeetingSessionPolicy,
   listGroupMeetings,
@@ -208,6 +209,54 @@ test("creates six distinct sessions, persists them atomically, and restores the 
   assert.deepEqual(files.sort(), [`${meeting.meetingId}.json`, `${meeting.meetingId}.workflow.json`].sort());
 });
 
+test("deletes a meeting with its member, undergraduate, workflow, and message records", async () => {
+  const root = await mkdtemp(join(tmpdir(), "medpi-meeting-delete-"));
+  const cwd = join(root, "project");
+  const agentDir = join(root, "agent");
+  await mkdir(cwd);
+  allowFileRoot(cwd);
+  let sequence = 0;
+  const meeting = await createGroupMeetingFromRoster(cwd, resolveGroupMeetingRoster(availableModels()), {
+    agentDir,
+    createSession: async (_cwd, command) => ({
+      sessionId: `delete-session-${++sequence}`,
+      data: null,
+      model: { provider: command.provider, modelId: command.modelId },
+      thinkingLevel: command.thinkingLevel,
+    }),
+  });
+  const [projectDirectory] = await readdir(join(agentDir, "meetings"));
+  const directory = join(agentDir, "meetings", projectDirectory);
+  const workflowPath = join(directory, `${meeting.meetingId}.workflow.json`);
+  const messageDirectory = join(directory, "lab-messages");
+  const messagePath = join(messageDirectory, `${meeting.meetingId}.json`);
+  await mkdir(messageDirectory);
+  await writeFile(workflowPath, JSON.stringify({
+    meetingId: meeting.meetingId,
+    cwd,
+    undergradThreads: [{ sessionId: "undergrad-child-1" }, { sessionId: "undergrad-child-2" }],
+  }));
+  await writeFile(messagePath, "{}");
+
+  const deletedSessionIds = [];
+  await deleteGroupMeeting(cwd, meeting.meetingId, {
+    agentDir,
+    deleteSession: async (sessionId) => {
+      deletedSessionIds.push(sessionId);
+      return true;
+    },
+  });
+
+  assert.deepEqual(deletedSessionIds, [
+    "undergrad-child-1",
+    "undergrad-child-2",
+    ...meeting.members.map((member) => member.sessionId),
+  ]);
+  assert.equal(await readGroupMeeting(cwd, meeting.meetingId, agentDir), null);
+  assert.equal(existsSync(workflowPath), false);
+  assert.equal(existsSync(messagePath), false);
+});
+
 test("applies only changed settings and persists the six-role configuration", async () => {
   const root = await mkdtemp(join(tmpdir(), "medpi-meeting-settings-"));
   const cwd = join(root, "project");
@@ -371,6 +420,14 @@ test("meeting settings PATCH applies request security before updating sessions",
   const contentTypeCheck = source.indexOf("hasJsonContentType(req)", patch);
   const update = source.indexOf("updateGroupMeetingSettings(cwd, id, body.members)", patch);
   assert.ok(patch >= 0 && originCheck > patch && contentTypeCheck > originCheck && update > contentTypeCheck);
+});
+
+test("meeting DELETE applies request security before deleting the meeting", async () => {
+  const source = await readFile(new URL("../app/api/meetings/[id]/route.ts", import.meta.url), "utf8");
+  const deletion = source.indexOf("export async function DELETE");
+  const originCheck = source.indexOf("isApiRequestAllowed(req)", deletion);
+  const remove = source.indexOf("deleteGroupMeeting(cwd, id)", deletion);
+  assert.ok(deletion >= 0 && originCheck > deletion && remove > originCheck);
 });
 
 test("an empty session is durably recoverable after the in-memory registry is cleared", async () => {

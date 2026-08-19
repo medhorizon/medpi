@@ -286,9 +286,11 @@ export function AppShell() {
     loading: meetingLoading,
     creating: meetingCreating,
     configuring: meetingConfiguring,
+    deleting: meetingDeleting,
     error: meetingError,
     openMeeting,
     leaveMeeting,
+    deleteMeeting,
     updateMeetingSettings,
   } = useGroupMeeting(meetingCwd, meetingMode ? initialNavigation.meetingId : null);
   const {
@@ -390,6 +392,13 @@ export function AppShell() {
     if (updated) setModelsRefreshKey((key) => key + 1);
     return updated;
   }, [updateMeetingSettings]);
+
+  const handleMeetingDelete = useCallback(async () => {
+    if (!meeting || meetingCreating || meetingConfiguring || meetingDeleting || !window.confirm(translate("meeting.deleteConfirm"))) return;
+    if (!await deleteMeeting()) return;
+    setRefreshKey((key) => key + 1);
+    exitMeeting(true);
+  }, [deleteMeeting, exitMeeting, meeting, meetingConfiguring, meetingCreating, meetingDeleting, translate]);
 
   const handleCwdChange = useCallback((cwd: string | null, projectRoot?: string | null) => {
     setActiveCwd(cwd);
@@ -702,7 +711,7 @@ export function AppShell() {
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
-  const meetingButtonDisabled = meetingCreating || meetingConfiguring || (!meetingMode && (!meetingCwd || isMobile));
+  const meetingButtonDisabled = meetingCreating || meetingConfiguring || meetingDeleting || (!meetingMode && (!meetingCwd || isMobile));
   const meetingButtonLabel = meetingCreating
     ? translate("meeting.creating")
     : meetingMode
@@ -734,6 +743,9 @@ export function AppShell() {
         selectedSessionId={selectedSession?.id ?? null}
         onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
+        onDeleteMeeting={meetingMode && meeting ? () => void handleMeetingDelete() : undefined}
+        meetingDeleteDisabled={meetingCreating || meetingConfiguring || meetingDeleting}
+        meetingDeleting={meetingDeleting}
         initialSessionId={initialSessionId}
         skipInitialProjectSelection={initialNavigation.requestedCwd !== null}
         onInitialRestoreDone={handleInitialRestoreDone}

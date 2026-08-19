@@ -95,3 +95,12 @@ test("updates meeting settings through the meeting endpoint and adopts the verif
   assert.match(hookSource.slice(update), /const updated = validateGroupMeeting\(payload, cwd\)/);
   assert.match(hookSource.slice(update), /setMeeting\(updated\)/);
 });
+
+test("deletes the active meeting through its endpoint and clears local state", () => {
+  const deletion = hookSource.indexOf("const deleteMeeting");
+  assert.ok(deletion >= 0);
+  const deleteSource = hookSource.slice(deletion);
+  assert.match(deleteSource, /method: "DELETE"/);
+  assert.match(deleteSource, /activeMeetingIdRef\.current = null/);
+  assert.match(deleteSource, /setMeeting\(null\)/);
+});
