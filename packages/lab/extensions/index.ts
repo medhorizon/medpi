@@ -26,6 +26,7 @@ const LAB_ACTIONS = [
 
 const ORCHESTRATE_GUIDELINES = [
   "Use lab_orchestrate for workflow state transitions; natural-language lab messages never change state.",
+  "The server derives the current meeting from this Pi session; never invent or supply a meetingId.",
   "Every mutating action payload requires a unique requestId. get_state uses an empty payload.",
   "PI payloads: ask_clarification {requestId,card}; submit_clarification {requestId,questionId,selectedOptionIds,freeText?}; dispatch_doctor {requestId,doctorRole,brief}; review_doctor_synthesis {requestId,workPackageId,decision}; complete_meeting {requestId,report}; cancel_meeting {requestId}.",
   "Doctor payloads: delegate_undergrad {requestId,workPackageId,purpose,workType,databaseScope?,title,objective,instructions,inputRefs,acceptanceCriteria,maxThreads}; databaseScope defaults to [pubmed,crossref], may explicitly add arxiv for preprints, and rejects all other databases. Then use review_undergrad_records; submit_pre_master_judgment; claim_master; release_master; submit_doctor_synthesis. Robust synthesis requires counterEvidence, sensitivityChecks, uncertainties, hypotheses, and proposedMethods; creative synthesis requires hypotheses and proposedMethods.",
@@ -67,14 +68,12 @@ export default function lab(pi: ExtensionAPI) {
     description: "Perform one typed lab workflow action. Select an enumerated action and pass its action-specific object fields in payload. Natural-language messages cannot substitute for this tool.",
     promptGuidelines: ORCHESTRATE_GUIDELINES,
     parameters: Type.Object({
-      meetingId: Type.String({ minLength: 1, maxLength: 100 }),
       action: StringEnum(LAB_ACTIONS),
       payload: Type.Optional(Type.Unknown({ description: "Action-specific object. All mutating actions require requestId; get_state uses {}. See the tool guidelines for role-specific fields." })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const result = await getLabRuntime().orchestrate({
         cwd: ctx.cwd,
-        meetingId: params.meetingId,
         actorSessionId: ctx.sessionManager.getSessionId(),
         action: params.action,
         payload: params.payload ?? {},

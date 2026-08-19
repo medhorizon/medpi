@@ -20,6 +20,9 @@ test("lab_orchestrate exposes the canonical action vocabulary and payload guidan
   }
   assert.match(source, /action: StringEnum\(LAB_ACTIONS\)/);
   assert.match(source, /promptGuidelines: ORCHESTRATE_GUIDELINES/);
+  assert.match(source, /server derives the current meeting from this Pi session/);
+  const orchestrateTool = source.slice(source.indexOf('name: "lab_orchestrate"'));
+  assert.doesNotMatch(orchestrateTool, /meetingId: Type\.String/);
   assert.match(source, /Every mutating action payload requires a unique requestId/);
   assert.match(source, /Robust synthesis requires counterEvidence, sensitivityChecks, uncertainties/);
   assert.match(source, /databaseScope defaults to \[pubmed,crossref\], may explicitly add arxiv/);

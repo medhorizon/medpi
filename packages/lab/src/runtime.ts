@@ -10,7 +10,6 @@ export interface LabMessageToolInput {
 
 export interface LabOrchestrateToolInput {
   cwd: string;
-  meetingId: string;
   actorSessionId: string;
   action: string;
   payload: unknown;

@@ -22,6 +22,7 @@ const {
   updateGroupMeetingSettings,
 } = await jiti.import("./group-meeting-server.ts");
 const { GROUP_MEETING_TOOL_POLICY_VERSION, getGroupMeetingRoleSystemPrompt, getGroupMeetingToolNames } = await jiti.import("./group-meeting.ts");
+const { resolveLabMeetingIdForSession } = await jiti.import("./lab-workflow.ts");
 const { getLabRuntime } = await jiti.import("@medpi/lab/runtime");
 
 test("importing the group meeting server cold-binds the lab runtime without a module cycle", () => {
@@ -187,6 +188,7 @@ test("creates six distinct sessions, persists them atomically, and restores the 
   }
   const restored = await readGroupMeeting(cwd, meeting.meetingId, agentDir);
   assert.deepEqual(restored?.members.map((member) => member.sessionId), meeting.members.map((member) => member.sessionId));
+  assert.equal(await resolveLabMeetingIdForSession(cwd, meeting.members[0].sessionId, agentDir), meeting.meetingId);
   const originalPolicy = getGroupMeetingSessionPolicy(meeting, meeting.members[5].sessionId);
   const restoredPolicy = await resolveGroupMeetingSessionPolicy(meeting.members[5].sessionId, agentDir);
   assert.deepEqual(restoredPolicy, originalPolicy);

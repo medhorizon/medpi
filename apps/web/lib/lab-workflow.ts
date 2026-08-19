@@ -1687,14 +1687,35 @@ export async function recoverInterruptedLabWorkflow(cwd: string, meetingId: stri
   });
 }
 
+export async function resolveLabMeetingIdForSession(cwd: string, sessionId: string, agentDir: string): Promise<string> {
+  const { listGroupMeetings } = await import("./group-meeting-server");
+  const meetingIds = new Set(
+    (await listGroupMeetings(cwd, agentDir))
+      .filter((meeting) => meeting.members.some((member) => member.sessionId === sessionId))
+      .map((meeting) => meeting.meetingId),
+  );
+  for (const workflow of await storedWorkflowsIn(workflowDirectory(cwd, agentDir))) {
+    if (workflow.undergradThreads.some((thread) => thread.sessionId === sessionId)) {
+      meetingIds.add(workflow.meetingId);
+    }
+  }
+  if (meetingIds.size !== 1) {
+    throw new LabWorkflowError(
+      meetingIds.size ? "Session belongs to multiple meetings" : "Session does not belong to this meeting project",
+      meetingIds.size ? "ambiguous_meeting_session" : "meeting_session_not_found",
+    );
+  }
+  return meetingIds.values().next().value!;
+}
+
 /** Bind the model-visible lab tools to the canonical Web workflow service. */
 export function bindLabWorkflowRuntime(): void {
-  configureLabMessageRuntime(({ cwd, meetingId, actorSessionId, action, payload }) => {
+  configureLabMessageRuntime(async ({ cwd, actorSessionId, action, payload }) => {
     const fields = objectValue(payload, "payload");
     if ("action" in fields) throw new LabWorkflowError("payload.action is not allowed", "invalid_action");
     return orchestrateLabWorkflow({
       cwd,
-      meetingId,
+      meetingId: await resolveLabMeetingIdForSession(cwd, actorSessionId, getAgentDir()),
       actorSessionId,
       action: { action, ...fields },
     });
