@@ -1022,12 +1022,17 @@ async function defaultAbortSession(sessionId: string): Promise<void> {
 
 async function defaultDeliverTask({ meeting, task }: UndergradTaskDeliveryInput): Promise<void> {
   const undergraduate = meeting.members.find((member) => member.role === "undergraduate");
-  if (!undergraduate?.sessionId) throw new LabWorkflowError("Undergraduate coordinator session is unavailable", "undergraduate_unavailable");
+  if (!undergraduate?.sessionId || !undergraduate.provider || !undergraduate.modelId || !undergraduate.thinkingLevel) {
+    throw new LabWorkflowError("Undergraduate coordinator session is unavailable", "undergraduate_unavailable");
+  }
   let session = getRpcSession(undergraduate.sessionId);
   if (!session?.isAlive()) {
     const sessionFile = await resolveSessionPath(undergraduate.sessionId);
     if (!sessionFile) throw new LabWorkflowError("Undergraduate coordinator session is unavailable", "undergraduate_unavailable");
     ({ session } = await startRpcSession(undergraduate.sessionId, sessionFile, meeting.cwd, {
+      initialModel: { provider: undergraduate.provider, modelId: undergraduate.modelId },
+      thinkingLevel: undergraduate.thinkingLevel,
+      persistStartupPreferences: false,
       fixedToolNames: getGroupMeetingToolNames("undergraduate"),
       fixedSystemPrompt: getGroupMeetingRoleSystemPrompt("undergraduate"),
     }));
@@ -1064,11 +1069,18 @@ async function defaultDeliverTask({ meeting, task }: UndergradTaskDeliveryInput)
 }
 
 async function defaultDeliverMasterTask({ meeting, reservation, workPackage }: MasterTaskDeliveryInput): Promise<void> {
+  const master = meeting.members.find((member) => member.sessionId === reservation.masterSessionId);
+  if (!master?.provider || !master.modelId || !master.thinkingLevel) {
+    throw new LabWorkflowError("Master session is unavailable", "master_unavailable");
+  }
   let session = getRpcSession(reservation.masterSessionId);
   if (!session?.isAlive()) {
     const sessionFile = await resolveSessionPath(reservation.masterSessionId);
     if (!sessionFile) throw new LabWorkflowError("Master session is unavailable", "master_unavailable");
     ({ session } = await startRpcSession(reservation.masterSessionId, sessionFile, meeting.cwd, {
+      initialModel: { provider: master.provider, modelId: master.modelId },
+      thinkingLevel: master.thinkingLevel,
+      persistStartupPreferences: false,
       fixedToolNames: getGroupMeetingToolNames(reservation.masterRole),
       fixedSystemPrompt: getGroupMeetingRoleSystemPrompt(reservation.masterRole),
     }));
@@ -1101,11 +1113,18 @@ async function defaultDeliverMasterTask({ meeting, reservation, workPackage }: M
 }
 
 async function defaultDeliverNotice({ meeting, notice }: LabNoticeDeliveryInput): Promise<void> {
+  const recipient = meeting.members.find((member) => member.sessionId === notice.toSessionId);
+  if (!recipient?.provider || !recipient.modelId || !recipient.thinkingLevel) {
+    throw new LabWorkflowError("Notice recipient session is unavailable", "notice_recipient_unavailable");
+  }
   let session = getRpcSession(notice.toSessionId);
   if (!session?.isAlive()) {
     const sessionFile = await resolveSessionPath(notice.toSessionId);
     if (!sessionFile) throw new LabWorkflowError("Notice recipient session is unavailable", "notice_recipient_unavailable");
     ({ session } = await startRpcSession(notice.toSessionId, sessionFile, meeting.cwd, {
+      initialModel: { provider: recipient.provider, modelId: recipient.modelId },
+      thinkingLevel: recipient.thinkingLevel,
+      persistStartupPreferences: false,
       fixedToolNames: getGroupMeetingToolNames(notice.toRole),
       fixedSystemPrompt: getGroupMeetingRoleSystemPrompt(notice.toRole),
     }));

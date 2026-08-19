@@ -185,8 +185,7 @@ test("group-session restores use the server-side policy and never a frontend rol
   for (const route of routes) {
     const source = await readFile(new URL(route, import.meta.url), "utf8");
     assert.match(source, /resolveGroupMeetingSessionPolicy\(id\)/);
-    assert.match(source, /fixedToolNames: meetingPolicy\.toolNames/);
-    assert.match(source, /fixedSystemPrompt: meetingPolicy\.systemPrompt/);
+    assert.match(source, /getGroupMeetingSessionStartOptions\(meetingPolicy\)/);
     assert.doesNotMatch(source, /body\.role|command\.role/);
   }
 });

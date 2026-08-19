@@ -1,6 +1,6 @@
 import { resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession, type AgentEvent } from "@/lib/rpc-manager";
-import { resolveGroupMeetingSessionPolicy } from "@/lib/group-meeting-server";
+import { getGroupMeetingSessionStartOptions, resolveGroupMeetingSessionPolicy } from "@/lib/group-meeting-server";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +34,7 @@ export async function GET(
     try {
       const meetingPolicy = await resolveGroupMeetingSessionPolicy(id);
       ({ session } = await startRpcSession(id, filePath, undefined, meetingPolicy
-        ? { toolNames: meetingPolicy.toolNames, fixedToolNames: meetingPolicy.toolNames, fixedSystemPrompt: meetingPolicy.systemPrompt }
+        ? getGroupMeetingSessionStartOptions(meetingPolicy)
         : {}));
     } catch (error) {
       return new Response(`Failed to start agent: ${error}`, { status: 500 });

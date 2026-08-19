@@ -384,6 +384,21 @@ test("accepts and dispatches a complete text doctor brief", async () => {
   assert.equal(dispatched.workPackages[0].doctorRole, "phd-2");
 });
 
+test("cold workflow deliveries pin the configured role model and thinking level", async () => {
+  const source = await readFile(new URL("./lab-workflow.ts", import.meta.url), "utf8");
+  const functionNames = ["defaultDeliverTask", "defaultDeliverMasterTask", "defaultDeliverNotice"];
+  for (let index = 0; index < functionNames.length; index += 1) {
+    const start = source.indexOf(`async function ${functionNames[index]}`);
+    const end = index + 1 < functionNames.length
+      ? source.indexOf(`async function ${functionNames[index + 1]}`)
+      : source.length;
+    const delivery = source.slice(start, end);
+    assert.match(delivery, /initialModel:/);
+    assert.match(delivery, /thinkingLevel:/);
+    assert.match(delivery, /persistStartupPreferences: false/);
+  }
+});
+
 test("persists workflow progress and a diagnostic when a wake-up notice fails", async () => {
   const context = await setup({ deliverNotice: async () => { throw new Error("recipient offline"); } });
   await context.call("pi", question("notice-failure-question"));

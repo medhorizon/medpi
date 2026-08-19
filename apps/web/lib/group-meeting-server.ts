@@ -54,6 +54,19 @@ export interface GroupMeetingSessionPolicy {
   role: GroupMeetingRole;
   toolNames: string[];
   systemPrompt: string;
+  initialModel?: { provider: string; modelId: string };
+  thinkingLevel?: GroupMeetingThinkingLevel;
+}
+
+export function getGroupMeetingSessionStartOptions(policy: GroupMeetingSessionPolicy) {
+  return {
+    toolNames: policy.toolNames,
+    ...(policy.initialModel ? { initialModel: policy.initialModel } : {}),
+    ...(policy.thinkingLevel ? { thinkingLevel: policy.thinkingLevel } : {}),
+    persistStartupPreferences: false,
+    fixedToolNames: policy.toolNames,
+    fixedSystemPrompt: policy.systemPrompt,
+  };
 }
 
 export function getGroupMeetingSessionPolicy(
@@ -64,11 +77,17 @@ export function getGroupMeetingSessionPolicy(
     throw new GroupMeetingError("Unsupported group meeting tool policy", "invalid_metadata");
   }
   const member = meeting.members.find((candidate) => candidate.sessionId === sessionId);
-  return member ? {
+  if (!member) return null;
+  if (!member.provider || !member.modelId || !member.thinkingLevel) {
+    throw new GroupMeetingError("Meeting member has incomplete model settings", "invalid_metadata", member.role);
+  }
+  return {
     role: member.role,
     toolNames: getGroupMeetingToolNames(member.role),
     systemPrompt: getGroupMeetingRoleSystemPrompt(member.role),
-  } : null;
+    initialModel: { provider: member.provider, modelId: member.modelId },
+    thinkingLevel: member.thinkingLevel,
+  };
 }
 
 export class GroupMeetingError extends Error {
@@ -314,22 +333,34 @@ async function applyMemberSettings(
     const toolNames = getGroupMeetingToolNames(member.role);
     ({ session } = await startRpcSession(member.sessionId, sessionFile, undefined, {
       toolNames,
+      initialModel: { provider: settings.provider, modelId: settings.modelId },
+      thinkingLevel: settings.thinkingLevel,
+      persistStartupPreferences: false,
       fixedToolNames: toolNames,
       fixedSystemPrompt: getGroupMeetingRoleSystemPrompt(member.role),
     }));
   }
 
-  await session.send({ type: "set_model", provider: settings.provider, modelId: settings.modelId });
-  await session.send({ type: "set_thinking_level", level: settings.thinkingLevel });
-  const state = await session.send({ type: "get_state" }) as {
-    model?: { provider: string; id: string };
-    thinkingLevel?: string;
-  };
-  return {
-    provider: state.model?.provider ?? "",
-    modelId: state.model?.id ?? "",
-    thinkingLevel: state.thinkingLevel,
-  };
+  const settingsManager = session.inner.settingsManager;
+  const defaultProvider = settingsManager.getDefaultProvider();
+  const defaultModel = settingsManager.getDefaultModel();
+  const defaultThinkingLevel = settingsManager.getDefaultThinkingLevel();
+  try {
+    await session.send({ type: "set_model", provider: settings.provider, modelId: settings.modelId });
+    await session.send({ type: "set_thinking_level", level: settings.thinkingLevel });
+    const state = await session.send({ type: "get_state" }) as {
+      model?: { provider: string; id: string };
+      thinkingLevel?: string;
+    };
+    return {
+      provider: state.model?.provider ?? "",
+      modelId: state.model?.id ?? "",
+      thinkingLevel: state.thinkingLevel,
+    };
+  } finally {
+    if (defaultProvider && defaultModel) settingsManager.setDefaultModelAndProvider(defaultProvider, defaultModel);
+    if (defaultThinkingLevel) settingsManager.setDefaultThinkingLevel(defaultThinkingLevel);
+  }
 }
 
 export async function updateGroupMeetingSettings(

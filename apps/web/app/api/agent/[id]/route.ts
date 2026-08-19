@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession } from "@/lib/rpc-manager";
-import { resolveGroupMeetingSessionPolicy } from "@/lib/group-meeting-server";
+import { getGroupMeetingSessionStartOptions, resolveGroupMeetingSessionPolicy } from "@/lib/group-meeting-server";
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -27,7 +27,7 @@ export async function POST(
 
     const meetingPolicy = await resolveGroupMeetingSessionPolicy(id);
     const { session } = await startRpcSession(id, filePath, undefined, meetingPolicy
-      ? { toolNames: meetingPolicy.toolNames, fixedToolNames: meetingPolicy.toolNames, fixedSystemPrompt: meetingPolicy.systemPrompt }
+      ? getGroupMeetingSessionStartOptions(meetingPolicy)
       : {});
     const result = await session.send(body);
 

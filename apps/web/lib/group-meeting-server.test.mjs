@@ -14,6 +14,7 @@ const {
   createGroupMeetingFromRoster,
   GroupMeetingError,
   getGroupMeetingSessionPolicy,
+  getGroupMeetingSessionStartOptions,
   listGroupMeetings,
   readGroupMeeting,
   resolveGroupMeetingRoster,
@@ -194,6 +195,19 @@ test("creates six distinct sessions, persists them atomically, and restores the 
   assert.deepEqual(restoredPolicy, originalPolicy);
   assert.deepEqual(restoredPolicy?.toolNames, getGroupMeetingToolNames("undergraduate"));
   assert.equal(restoredPolicy?.systemPrompt, getGroupMeetingRoleSystemPrompt("undergraduate"));
+  assert.deepEqual(restoredPolicy?.initialModel, {
+    provider: roster[5].provider,
+    modelId: roster[5].modelId,
+  });
+  assert.equal(restoredPolicy?.thinkingLevel, roster[5].thinkingLevel);
+  assert.deepEqual(getGroupMeetingSessionStartOptions(restoredPolicy), {
+    toolNames: getGroupMeetingToolNames("undergraduate"),
+    initialModel: { provider: roster[5].provider, modelId: roster[5].modelId },
+    thinkingLevel: roster[5].thinkingLevel,
+    persistStartupPreferences: false,
+    fixedToolNames: getGroupMeetingToolNames("undergraduate"),
+    fixedSystemPrompt: getGroupMeetingRoleSystemPrompt("undergraduate"),
+  });
   const [projectDirectory] = await readdir(join(agentDir, "meetings"));
   await writeFile(join(agentDir, "meetings", projectDirectory, `${meeting.meetingId}.workflow.json`), "{}");
   assert.deepEqual((await listGroupMeetings(cwd, agentDir)).map((entry) => entry.meetingId), [meeting.meetingId]);
@@ -244,6 +258,20 @@ test("applies only changed settings and persists the six-role configuration", as
   assert.equal((await readGroupMeeting(cwd, meeting.meetingId, agentDir)).members[0].thinkingLevel, "high");
 });
 
+test("meeting model updates preserve application defaults", async () => {
+  const source = await readFile(new URL("./group-meeting-server.ts", import.meta.url), "utf8");
+  const applySettings = source.slice(
+    source.indexOf("async function applyMemberSettings"),
+    source.indexOf("export async function updateGroupMeetingSettings"),
+  );
+  assert.match(applySettings, /getDefaultProvider\(\)/);
+  assert.match(applySettings, /getDefaultModel\(\)/);
+  assert.match(applySettings, /getDefaultThinkingLevel\(\)/);
+  assert.match(applySettings, /finally \{/);
+  assert.match(applySettings, /setDefaultModelAndProvider\(defaultProvider, defaultModel\)/);
+  assert.match(applySettings, /setDefaultThinkingLevel\(defaultThinkingLevel\)/);
+});
+
 test("cold-restores an undergraduate child with the fixed isolated policy", async () => {
   const root = await mkdtemp(join(tmpdir(), "medpi-child-policy-"));
   const agentDir = join(root, "agent");
@@ -261,6 +289,8 @@ test("cold-restores an undergraduate child with the fixed isolated policy", asyn
   assert.equal(policy?.role, "undergraduate");
   assert.deepEqual(policy?.toolNames, ["science_search", "science_fetch", "lab_orchestrate"]);
   assert.match(policy?.systemPrompt ?? "", /isolated child worker/i);
+  assert.equal(policy?.initialModel, undefined);
+  assert.equal(policy?.thinkingLevel, undefined);
 });
 
 test("concurrent creates never merge meeting or session ids", async () => {

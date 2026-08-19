@@ -142,6 +142,9 @@ test("cold delivery restores the fixed role tool policy", async () => {
   const coldDelivery = source.slice(source.indexOf("async function deliverToSession"), source.indexOf("function receipt"));
   assert.match(coldDelivery, /getGroupMeetingToolNames\(recipient\.role\)/);
   assert.match(coldDelivery, /toolNames,/);
+  assert.match(coldDelivery, /initialModel: \{ provider: recipient\.provider, modelId: recipient\.modelId \}/);
+  assert.match(coldDelivery, /thinkingLevel: recipient\.thinkingLevel/);
+  assert.match(coldDelivery, /persistStartupPreferences: false/);
   assert.match(coldDelivery, /fixedToolNames: toolNames/);
   assert.match(coldDelivery, /fixedSystemPrompt: getGroupMeetingRoleSystemPrompt\(recipient\.role\)/);
 });

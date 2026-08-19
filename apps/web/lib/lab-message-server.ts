@@ -144,7 +144,9 @@ function inboundPrompt(message: LabMessage): string {
 }
 
 async function deliverToSession(recipient: GroupMeetingMember, message: LabMessage): Promise<"prompt" | "follow_up"> {
-  if (!recipient.sessionId) throw new LabMessageError("Recipient session is unavailable", "recipient_unavailable");
+  if (!recipient.sessionId || !recipient.provider || !recipient.modelId || !recipient.thinkingLevel) {
+    throw new LabMessageError("Recipient session is unavailable", "recipient_unavailable");
+  }
   let session = getRpcSession(recipient.sessionId);
   if (!session?.isAlive()) {
     const sessionFile = await resolveSessionPath(recipient.sessionId);
@@ -152,6 +154,9 @@ async function deliverToSession(recipient: GroupMeetingMember, message: LabMessa
     const toolNames = getGroupMeetingToolNames(recipient.role);
     ({ session } = await startRpcSession(recipient.sessionId, sessionFile, undefined, {
       toolNames,
+      initialModel: { provider: recipient.provider, modelId: recipient.modelId },
+      thinkingLevel: recipient.thinkingLevel,
+      persistStartupPreferences: false,
       fixedToolNames: toolNames,
       fixedSystemPrompt: getGroupMeetingRoleSystemPrompt(recipient.role),
     }));
