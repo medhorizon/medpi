@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./extension": "./extensions/index.ts",
     "./runtime": "./src/runtime.ts"
   },
   "pi": {

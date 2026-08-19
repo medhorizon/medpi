@@ -10,7 +10,7 @@ test("RPC session startup preloads extension-registered providers before restori
   const source = await readFile(new URL("./rpc-manager.ts", import.meta.url), "utf8");
   const startupSource = source.slice(source.indexOf("export async function startRpcSession"));
 
-  assert.match(startupSource, /createAgentSessionServices\(/);
+  assert.match(startupSource, /createMedPiAgentSessionServices\(/);
   assert.match(startupSource, /createAgentSessionFromServices\(/);
   assert.doesNotMatch(startupSource, /await createAgentSession\(/);
 });

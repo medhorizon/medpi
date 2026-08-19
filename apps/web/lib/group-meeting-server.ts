@@ -1,10 +1,11 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { createAgentSessionServices, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { createHash, randomUUID } from "crypto";
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "fs/promises";
 import { join, resolve } from "path";
 import { createNewAgentSession } from "./agent-session-create";
+import { createMedPiAgentSessionServices } from "./agent-session-services";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "./file-access";
 import {
   GROUP_MEETING_ROSTER,
@@ -149,7 +150,7 @@ async function preflightGroupMeeting(requestedCwd: string): Promise<{
   const cwd = await authorizeMeetingCwd(requestedCwd);
   const agentDir = getAgentDir();
   const trustReloadOptions = projectTrustReloadOptions(cwd, agentDir);
-  const services = await createAgentSessionServices({
+  const services = await createMedPiAgentSessionServices({
     cwd,
     agentDir,
     ...(trustReloadOptions ? { resourceLoaderReloadOptions: trustReloadOptions } : {}),
