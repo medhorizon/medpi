@@ -11,7 +11,7 @@ test("restores explicit and recent meetings while keeping their cwd in navigatio
 });
 
 test("guards desktop meeting creation and preserves the previous chat", () => {
-  assert.match(source, /meetingButtonDisabled = meetingCreating \|\| \(!meetingMode && \(!meetingCwd \|\| isMobile\)\)/);
+  assert.match(source, /meetingButtonDisabled = meetingCreating \|\| meetingConfiguring \|\| \(!meetingMode && \(!meetingCwd \|\| isMobile\)\)/);
   assert.match(source, /initialNavigation\.meetingId \? \{ selectedSession: null, newSessionCwd: null \} : null/);
   assert.match(source, /meetingReturnStateRef\.current = \{ selectedSession, newSessionCwd \}/);
   assert.match(source, /setSelectedSession\(previous\.selectedSession\)/);
@@ -22,6 +22,13 @@ test("meeting mode owns the center while single-session controls stay hidden", (
   assert.match(source, /\{meetingMode \? \(\s*<GroupMeetingView/);
   assert.match(source, /\{showChat && !meetingMode && \(/);
   assert.match(source, /\{showChat && !meetingMode && \(sessionStats \|\| contextUsage\)/);
+});
+
+test("meeting mode adds the role configuration card to the lower-left sidebar", () => {
+  assert.match(source, /meetingMode && meeting && \(\s*<GroupMeetingConfigCard/);
+  assert.match(source, /onSave=\{handleMeetingSettingsSave\}/);
+  assert.match(source, /setModelsRefreshKey\(\(key\) => key \+ 1\)/);
+  assert.match(source, /meetingCreating \|\| meetingConfiguring/);
 });
 
 test("meeting file links retain their member session authorization", () => {

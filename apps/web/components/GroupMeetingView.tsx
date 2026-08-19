@@ -132,7 +132,7 @@ export function MeetingAgentPane({
       <div className="min-h-0 flex-1">
         {session ? (
           <ChatWindow
-            key={session.id}
+            key={`${session.id}:${member.provider}:${member.modelId}:${member.thinkingLevel}`}
             session={session}
             newSessionCwd={null}
             readOnly={!canPrompt}

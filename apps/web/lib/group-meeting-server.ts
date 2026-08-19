@@ -14,12 +14,15 @@ import {
   getGroupMeetingToolNames,
   type GroupMeeting,
   type GroupMeetingMember,
+  type GroupMeetingMemberSettings,
   type GroupMeetingRole,
   type GroupMeetingThinkingLevel,
 } from "./group-meeting";
 import { resolveVisibleModels } from "./model-scope";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { bindLabWorkflowRuntime, resolveLabWorkflowChildSessionPolicy } from "./lab-workflow";
+import { getRpcSession, startRpcSession } from "./rpc-manager";
+import { resolveSessionPath } from "./session-reader";
 import { resolveProject } from "./worktree";
 
 bindLabWorkflowRuntime();
@@ -36,6 +39,15 @@ interface MeetingCreationDependencies {
   agentDir?: string;
   projectRoot?: string;
   createSession?: typeof createNewAgentSession;
+}
+
+interface MeetingSettingsDependencies {
+  agentDir?: string;
+  applySettings?: (
+    member: GroupMeetingMember,
+    settings: GroupMeetingMemberSettings,
+  ) => Promise<{ provider: string; modelId: string; thinkingLevel: string | undefined }>;
+  visibleModels?: readonly Model<Api>[];
 }
 
 export interface GroupMeetingSessionPolicy {
@@ -117,6 +129,62 @@ export function resolveGroupMeetingRoster(
   });
 }
 
+function parseGroupMeetingSettings(value: unknown): GroupMeetingMemberSettings[] {
+  if (!Array.isArray(value) || value.length !== GROUP_MEETING_ROSTER.length) {
+    throw new GroupMeetingError("Settings must include all six meeting roles", "invalid_settings");
+  }
+  return GROUP_MEETING_ROSTER.map((expected, index) => {
+    const candidate = value[index] as Partial<GroupMeetingMemberSettings> | null;
+    if (
+      !candidate
+      || candidate.role !== expected.role
+      || typeof candidate.provider !== "string"
+      || !candidate.provider.trim()
+      || typeof candidate.modelId !== "string"
+      || !candidate.modelId.trim()
+      || typeof candidate.thinkingLevel !== "string"
+      || !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(candidate.thinkingLevel)
+    ) {
+      throw roleError(expected.role, expected.label, "invalid_settings", "无效的模型或推理强度配置");
+    }
+    return {
+      role: expected.role,
+      provider: candidate.provider.trim(),
+      modelId: candidate.modelId.trim(),
+      thinkingLevel: candidate.thinkingLevel as GroupMeetingThinkingLevel,
+    };
+  });
+}
+
+export function resolveGroupMeetingSettings(
+  visibleModels: readonly Model<Api>[],
+  value: unknown,
+): GroupMeetingMemberSettings[] {
+  return parseGroupMeetingSettings(value).map((settings, index) => {
+    const expected = GROUP_MEETING_ROSTER[index];
+    const model = visibleModels.find(
+      (candidate) => candidate.provider === settings.provider && candidate.id === settings.modelId,
+    );
+    if (!model) {
+      throw roleError(
+        expected.role,
+        expected.label,
+        "model_unavailable",
+        `模型 ${settings.provider}/${settings.modelId} 不可见或未认证`,
+      );
+    }
+    if (!getSupportedThinkingLevels(model).includes(settings.thinkingLevel)) {
+      throw roleError(
+        expected.role,
+        expected.label,
+        "thinking_unsupported",
+        `模型 ${model.provider}/${model.id} 不支持 thinking level ${settings.thinkingLevel}`,
+      );
+    }
+    return settings;
+  });
+}
+
 async function normalizeMeetingCwd(requestedCwd: string): Promise<string> {
   const absolute = resolve(requestedCwd);
   let cwdStat;
@@ -149,6 +217,12 @@ async function preflightGroupMeeting(requestedCwd: string): Promise<{
 }> {
   const cwd = await authorizeMeetingCwd(requestedCwd);
   const agentDir = getAgentDir();
+  const visibleModels = await loadVisibleMeetingModels(cwd, agentDir);
+  const { projectRoot } = await resolveProject(cwd);
+  return { cwd, projectRoot, roster: resolveGroupMeetingRoster(visibleModels) };
+}
+
+async function loadVisibleMeetingModels(cwd: string, agentDir: string): Promise<readonly Model<Api>[]> {
   const trustReloadOptions = projectTrustReloadOptions(cwd, agentDir);
   const services = await createMedPiAgentSessionServices({
     cwd,
@@ -159,8 +233,7 @@ async function preflightGroupMeeting(requestedCwd: string): Promise<{
     services.modelRuntime,
     services.settingsManager.getEnabledModels(),
   );
-  const { projectRoot } = await resolveProject(cwd);
-  return { cwd, projectRoot, roster: resolveGroupMeetingRoster(scope.visible) };
+  return scope.visible;
 }
 
 function meetingDirectory(cwd: string, agentDir: string): string {
@@ -227,6 +300,109 @@ export async function readGroupMeeting(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function applyMemberSettings(
+  member: GroupMeetingMember,
+  settings: GroupMeetingMemberSettings,
+): Promise<{ provider: string; modelId: string; thinkingLevel: string | undefined }> {
+  if (!member.sessionId) throw new Error("Meeting member has no session");
+  let session = getRpcSession(member.sessionId);
+  if (!session?.isAlive()) {
+    const sessionFile = await resolveSessionPath(member.sessionId);
+    if (!sessionFile) throw new Error(`Session not found: ${member.sessionId}`);
+    const toolNames = getGroupMeetingToolNames(member.role);
+    ({ session } = await startRpcSession(member.sessionId, sessionFile, undefined, {
+      toolNames,
+      fixedToolNames: toolNames,
+      fixedSystemPrompt: getGroupMeetingRoleSystemPrompt(member.role),
+    }));
+  }
+
+  await session.send({ type: "set_model", provider: settings.provider, modelId: settings.modelId });
+  await session.send({ type: "set_thinking_level", level: settings.thinkingLevel });
+  const state = await session.send({ type: "get_state" }) as {
+    model?: { provider: string; id: string };
+    thinkingLevel?: string;
+  };
+  return {
+    provider: state.model?.provider ?? "",
+    modelId: state.model?.id ?? "",
+    thinkingLevel: state.thinkingLevel,
+  };
+}
+
+export async function updateGroupMeetingSettings(
+  requestedCwd: string,
+  meetingId: string,
+  value: unknown,
+  dependencies: MeetingSettingsDependencies = {},
+): Promise<GroupMeeting> {
+  const agentDir = dependencies.agentDir ?? getAgentDir();
+  const meeting = await readGroupMeeting(requestedCwd, meetingId, agentDir);
+  if (!meeting) throw new GroupMeetingError("Meeting not found", "meeting_not_found");
+  if (meeting.status !== "ready") {
+    throw new GroupMeetingError("Only a ready meeting can be configured", "meeting_not_ready");
+  }
+
+  const visibleModels = dependencies.visibleModels ?? await loadVisibleMeetingModels(meeting.cwd, agentDir);
+  const settings = resolveGroupMeetingSettings(visibleModels, value);
+  const applySettings = dependencies.applySettings ?? applyMemberSettings;
+  const touched: Array<{ member: GroupMeetingMember; settings: GroupMeetingMemberSettings }> = [];
+  let activeRole: GroupMeetingRole | undefined;
+
+  try {
+    for (let index = 0; index < meeting.members.length; index += 1) {
+      const member = meeting.members[index];
+      const requested = settings[index];
+      activeRole = member.role;
+      if (!member.provider || !member.modelId || !member.thinkingLevel) {
+        throw new Error("Meeting member has incomplete model settings");
+      }
+      if (
+        member.provider === requested.provider
+        && member.modelId === requested.modelId
+        && member.thinkingLevel === requested.thinkingLevel
+      ) {
+        continue;
+      }
+      touched.push({
+        member,
+        settings: {
+          role: member.role,
+          provider: member.provider,
+          modelId: member.modelId,
+          thinkingLevel: member.thinkingLevel,
+        },
+      });
+      const actual = await applySettings(member, requested);
+      if (
+        actual.provider !== requested.provider
+        || actual.modelId !== requested.modelId
+        || actual.thinkingLevel !== requested.thinkingLevel
+      ) {
+        throw new Error(
+          `Session did not apply ${requested.provider}/${requested.modelId}:${requested.thinkingLevel}`,
+        );
+      }
+    }
+  } catch (error) {
+    for (const original of touched.reverse()) {
+      await applySettings(original.member, original.settings).catch(() => {});
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    const label = GROUP_MEETING_ROSTER.find((member) => member.role === activeRole)?.label ?? "Meeting";
+    throw roleError(activeRole ?? "pi", label, "settings_apply_failed", reason);
+  }
+
+  meeting.members = meeting.members.map((member, index) => ({
+    ...member,
+    provider: settings[index].provider,
+    modelId: settings[index].modelId,
+    thinkingLevel: settings[index].thinkingLevel,
+  }));
+  await persistGroupMeeting(meeting, agentDir);
+  return meeting;
 }
 
 export async function resolveGroupMeetingSessionPolicy(

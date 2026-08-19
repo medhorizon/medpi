@@ -13,6 +13,7 @@ import { PluginsConfig } from "./PluginsConfig";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { BranchNavigator } from "./BranchNavigator";
 import { GroupMeetingView } from "./GroupMeetingView";
+import { GroupMeetingConfigCard } from "./GroupMeetingConfigCard";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -24,6 +25,7 @@ import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
 import { buildMeetingNavigationUrl, getInitialNavigation } from "@/lib/initial-navigation";
+import type { GroupMeetingMemberSettings } from "@/lib/group-meeting";
 import {
   getDefaultRightPanelWidth,
   getRightPanelMaxWidth,
@@ -283,9 +285,11 @@ export function AppShell() {
     meeting,
     loading: meetingLoading,
     creating: meetingCreating,
+    configuring: meetingConfiguring,
     error: meetingError,
     openMeeting,
     leaveMeeting,
+    updateMeetingSettings,
   } = useGroupMeeting(meetingCwd, meetingMode ? initialNavigation.meetingId : null);
   const {
     workflow,
@@ -380,6 +384,12 @@ export function AppShell() {
     setRefreshKey((key) => key + 1);
     router.replace(buildMeetingNavigationUrl(opened.meetingId, opened.cwd), { scroll: false });
   }, [exitMeeting, isMobile, meetingCreating, meetingCwd, meetingMode, newSessionCwd, openMeeting, router, selectedSession]);
+
+  const handleMeetingSettingsSave = useCallback(async (members: GroupMeetingMemberSettings[]) => {
+    const updated = await updateMeetingSettings(members);
+    if (updated) setModelsRefreshKey((key) => key + 1);
+    return updated;
+  }, [updateMeetingSettings]);
 
   const handleCwdChange = useCallback((cwd: string | null, projectRoot?: string | null) => {
     setActiveCwd(cwd);
@@ -692,7 +702,7 @@ export function AppShell() {
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
-  const meetingButtonDisabled = meetingCreating || (!meetingMode && (!meetingCwd || isMobile));
+  const meetingButtonDisabled = meetingCreating || meetingConfiguring || (!meetingMode && (!meetingCwd || isMobile));
   const meetingButtonLabel = meetingCreating
     ? translate("meeting.creating")
     : meetingMode
@@ -737,6 +747,15 @@ export function AppShell() {
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
       />
+      {meetingMode && meeting && (
+        <GroupMeetingConfigCard
+          key={meeting.meetingId}
+          meeting={meeting}
+          modelsRefreshKey={modelsRefreshKey}
+          configuring={meetingConfiguring}
+          onSave={handleMeetingSettingsSave}
+        />
+      )}
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
           {

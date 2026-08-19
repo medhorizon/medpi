@@ -13,7 +13,7 @@ test("renders six session-keyed panes in an accessible 3 by 2 desktop grid", () 
   assert.match(viewSource, /grid-cols-3 grid-rows-2/);
   assert.match(viewSource, /meeting\.members\.map\(\(member\) =>/);
   assert.match(viewSource, /key=\{member\.sessionId \?\? member\.role\}/);
-  assert.match(viewSource, /<ChatWindow[\s\S]*key=\{session\.id\}[\s\S]*session=\{session\}/);
+  assert.match(viewSource, /<ChatWindow[\s\S]*key=\{`\$\{session\.id\}:\$\{member\.provider\}:\$\{member\.modelId\}:\$\{member\.thinkingLevel\}`\}[\s\S]*session=\{session\}/);
   assert.match(viewSource, /role="region"/);
   assert.match(viewSource, /data-session-id=\{member\.sessionId \?\? ""\}/);
   assert.match(viewSource, /onOpenFile\?: \(filePath: string, sessionId: string\) => void/);

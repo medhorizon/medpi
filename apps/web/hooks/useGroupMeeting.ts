@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   GROUP_MEETING_ROSTER,
   type GroupMeeting,
+  type GroupMeetingMemberSettings,
   type GroupMeetingThinkingLevel,
 } from "@/lib/group-meeting";
 
@@ -77,9 +78,11 @@ export function useGroupMeeting(cwd: string | null, meetingId: string | null = n
   const [meeting, setMeeting] = useState<GroupMeeting | null>(null);
   const [loading, setLoading] = useState(Boolean(cwd && meetingId));
   const [creating, setCreating] = useState(false);
+  const [configuring, setConfiguring] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generationRef = useRef(0);
   const openingRef = useRef(false);
+  const configuringRef = useRef(false);
 
   const activeMeetingIdRef = useRef<string | null>(meetingId);
 
@@ -196,5 +199,45 @@ export function useGroupMeeting(cwd: string | null, meetingId: string | null = n
     setCreating(false);
   }, []);
 
-  return { meeting, loading, creating, error, loadMeeting, refresh, openMeeting, leaveMeeting };
+  const updateMeetingSettings = useCallback(async (members: GroupMeetingMemberSettings[]) => {
+    if (!cwd || !meeting || configuringRef.current) return null;
+    configuringRef.current = true;
+    setConfiguring(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/meetings/${encodeURIComponent(meeting.meetingId)}?cwd=${encodeURIComponent(cwd)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ members }),
+        },
+      );
+      const payload: unknown = await response.json();
+      if (!response.ok) throw new Error(responseError(payload, response.status));
+      const updated = validateGroupMeeting(payload, cwd);
+      setMeeting(updated);
+      return updated;
+    } catch (cause) {
+      const nextError = cause instanceof Error ? cause.message : String(cause);
+      setError(nextError);
+      throw new Error(nextError);
+    } finally {
+      configuringRef.current = false;
+      setConfiguring(false);
+    }
+  }, [cwd, meeting]);
+
+  return {
+    meeting,
+    loading,
+    creating,
+    configuring,
+    error,
+    loadMeeting,
+    refresh,
+    openMeeting,
+    leaveMeeting,
+    updateMeetingSettings,
+  };
 }

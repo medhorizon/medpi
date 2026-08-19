@@ -17,7 +17,9 @@ const {
   listGroupMeetings,
   readGroupMeeting,
   resolveGroupMeetingRoster,
+  resolveGroupMeetingSettings,
   resolveGroupMeetingSessionPolicy,
+  updateGroupMeetingSettings,
 } = await jiti.import("./group-meeting-server.ts");
 const { GROUP_MEETING_TOOL_POLICY_VERSION, getGroupMeetingRoleSystemPrompt, getGroupMeetingToolNames } = await jiti.import("./group-meeting.ts");
 const { getLabRuntime } = await jiti.import("@medpi/lab/runtime");
@@ -108,6 +110,28 @@ test("reports the role for missing, ambiguous, and unsupported models", () => {
   );
 });
 
+test("validates explicit model and thinking settings without provider guessing", () => {
+  const settings = resolveGroupMeetingRoster(availableModels()).map(({ role, provider, modelId, thinkingLevel }) => ({
+    role,
+    provider,
+    modelId,
+    thinkingLevel,
+  }));
+  assert.deepEqual(resolveGroupMeetingSettings(availableModels(), settings), settings);
+  assert.throws(
+    () => resolveGroupMeetingSettings(availableModels(), settings.map((entry, index) => (
+      index === 0 ? { ...entry, provider: "other-provider" } : entry
+    ))),
+    (error) => error instanceof GroupMeetingError && error.code === "model_unavailable" && error.role === "pi",
+  );
+  assert.throws(
+    () => resolveGroupMeetingSettings(availableModels().map((entry) => entry.id === "gpt-5.6-sol"
+      ? model(entry.id, entry.provider, { max: false })
+      : entry), settings),
+    (error) => error instanceof GroupMeetingError && error.code === "thinking_unsupported" && error.role === "pi",
+  );
+});
+
 test("creates six distinct sessions, persists them atomically, and restores the same ids", async () => {
   const root = await mkdtemp(join(tmpdir(), "medpi-meeting-"));
   const cwd = join(root, "project");
@@ -175,6 +199,47 @@ test("creates six distinct sessions, persists them atomically, and restores the 
   const projectDirs = await readdir(join(agentDir, "meetings"));
   const files = await readdir(join(agentDir, "meetings", projectDirs[0]));
   assert.deepEqual(files.sort(), [`${meeting.meetingId}.json`, `${meeting.meetingId}.workflow.json`].sort());
+});
+
+test("applies only changed settings and persists the six-role configuration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "medpi-meeting-settings-"));
+  const cwd = join(root, "project");
+  const agentDir = join(root, "agent");
+  await mkdir(cwd);
+  allowFileRoot(cwd);
+  let sequence = 0;
+  const roster = resolveGroupMeetingRoster(availableModels());
+  const meeting = await createGroupMeetingFromRoster(cwd, roster, {
+    agentDir,
+    createSession: async (_cwd, command) => ({
+      sessionId: `settings-session-${++sequence}`,
+      data: null,
+      model: { provider: command.provider, modelId: command.modelId },
+      thinkingLevel: command.thinkingLevel,
+    }),
+  });
+  const settings = roster.map(({ role, provider, modelId, thinkingLevel }, index) => ({
+    role,
+    provider,
+    modelId,
+    thinkingLevel: index === 0 ? "high" : thinkingLevel,
+  }));
+  const applied = [];
+  const updated = await updateGroupMeetingSettings(cwd, meeting.meetingId, settings, {
+    agentDir,
+    visibleModels: availableModels(),
+    applySettings: async (member, requested) => {
+      applied.push({ sessionId: member.sessionId, ...requested });
+      return requested;
+    },
+  });
+
+  assert.deepEqual(applied, [{
+    sessionId: meeting.members[0].sessionId,
+    ...settings[0],
+  }]);
+  assert.equal(updated.members[0].thinkingLevel, "high");
+  assert.equal((await readGroupMeeting(cwd, meeting.meetingId, agentDir)).members[0].thinkingLevel, "high");
 });
 
 test("cold-restores an undergraduate child with the fixed isolated policy", async () => {
@@ -258,6 +323,15 @@ test("meeting POST applies request-origin and JSON checks before creation", asyn
   assert.ok(originCheck >= 0 && contentTypeCheck > originCheck && creation > contentTypeCheck);
   assert.match(source, /code: "untrusted_request"/);
   assert.match(source, /code: error\.code/);
+});
+
+test("meeting settings PATCH applies request security before updating sessions", async () => {
+  const source = await readFile(new URL("../app/api/meetings/[id]/route.ts", import.meta.url), "utf8");
+  const patch = source.indexOf("export async function PATCH");
+  const originCheck = source.indexOf("isApiRequestAllowed(req)", patch);
+  const contentTypeCheck = source.indexOf("hasJsonContentType(req)", patch);
+  const update = source.indexOf("updateGroupMeetingSettings(cwd, id, body.members)", patch);
+  assert.ok(patch >= 0 && originCheck > patch && contentTypeCheck > originCheck && update > contentTypeCheck);
 });
 
 test("an empty session is durably recoverable after the in-memory registry is cleared", async () => {

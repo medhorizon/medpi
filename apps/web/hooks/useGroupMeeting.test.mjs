@@ -86,3 +86,12 @@ test("preserves backend diagnostics for preflight failures", () => {
   assert.ok(responseCheck >= 0 && successValidation > responseCheck);
   assert.match(hookSource, /failedCandidate[\s\S]*responseError\(payload, response\.status\)/);
 });
+
+test("updates meeting settings through the meeting endpoint and adopts the verified response", () => {
+  const update = hookSource.indexOf("const updateMeetingSettings");
+  assert.ok(update >= 0);
+  assert.match(hookSource.slice(update), /method: "PATCH"/);
+  assert.match(hookSource.slice(update), /body: JSON\.stringify\(\{ members \}\)/);
+  assert.match(hookSource.slice(update), /const updated = validateGroupMeeting\(payload, cwd\)/);
+  assert.match(hookSource.slice(update), /setMeeting\(updated\)/);
+});

@@ -68,6 +68,13 @@ export interface GroupMeetingMember {
   error?: string;
 }
 
+export interface GroupMeetingMemberSettings {
+  role: GroupMeetingRole;
+  provider: string;
+  modelId: string;
+  thinkingLevel: GroupMeetingThinkingLevel;
+}
+
 export interface GroupMeeting {
   meetingId: string;
   cwd: string;
