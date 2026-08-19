@@ -48,6 +48,11 @@ test("shows role, actual runtime model, thinking level, and pane-local status", 
   assert.match(viewSource, /member\.status === "creating"[\s\S]*meeting\.memberCreating/);
 });
 
+test("shows loading only before a meeting is available", () => {
+  assert.match(viewSource, /if \(loading && !meeting\)/);
+  assert.match(viewSource, /meeting\.loading/);
+});
+
 test("shows a clear narrow-screen fallback instead of squeezing the panes", () => {
   assert.match(viewSource, /const isMobile = useIsMobile\(\)/);
   assert.match(viewSource, /if \(isMobile\)/);

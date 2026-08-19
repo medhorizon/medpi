@@ -76,6 +76,7 @@ test("locks opening and restores the latest ready meeting before creating", () =
   const creation = hookSource.indexOf('fetch("/api/meetings"', lookup);
   assert.ok(lookup >= 0 && creation > lookup);
   assert.match(hookSource, /find\(\(candidate\) => candidate\.status === "ready"\)/);
+  assert.match(hookSource, /setMeeting\(\(current\) => \(current\?\.meetingId === normalizedId \? current : null\)\)/);
   assert.match(hookSource, /if \(cwd && meetingId\)[\s\S]*loadMeeting\(meetingId\)/);
   assert.match(hookSource, /Project cwd is required to load a meeting/);
 });

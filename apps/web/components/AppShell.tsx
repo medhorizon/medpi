@@ -280,7 +280,10 @@ export function AppShell() {
   const initialSessionId = initialNavigation.sessionId;
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
   const activeProjectRootRef = useRef<string | null>(null);
-  const meetingCwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd;
+  const meetingCwd = selectedSession?.cwd
+    ?? newSessionCwd
+    ?? activeCwd
+    ?? (meetingMode ? initialNavigation.requestedCwd : null);
   const {
     meeting,
     loading: meetingLoading,
@@ -384,8 +387,11 @@ export function AppShell() {
     const opened = await openMeeting();
     if (!opened || !meetingModeRef.current) return;
     setRefreshKey((key) => key + 1);
-    router.replace(buildMeetingNavigationUrl(opened.meetingId, opened.cwd), { scroll: false });
-  }, [exitMeeting, isMobile, meetingCreating, meetingCwd, meetingMode, newSessionCwd, openMeeting, router, selectedSession]);
+    // Same as session restore: Next router.replace on search params remounts
+    // AppShell via the page Suspense boundary and can leave the view stuck on
+    // "Loading group meeting…". Keep the in-memory meeting and only update the URL.
+    window.history.replaceState(window.history.state, "", buildMeetingNavigationUrl(opened.meetingId, opened.cwd));
+  }, [exitMeeting, isMobile, meetingCreating, meetingCwd, meetingMode, newSessionCwd, openMeeting, selectedSession]);
 
   const handleMeetingSettingsSave = useCallback(async (members: GroupMeetingMemberSettings[]) => {
     const updated = await updateMeetingSettings(members);
@@ -1658,7 +1664,7 @@ export function AppShell() {
           {meetingMode ? (
             <GroupMeetingView
               meeting={meeting}
-              loading={meetingLoading || meetingCreating || initialCwdStatus === "validating"}
+              loading={(meetingLoading || meetingCreating || initialCwdStatus === "validating") && !meeting}
               error={meetingError}
               modelsRefreshKey={modelsRefreshKey}
               onAgentEnd={handleMeetingAgentEnd}

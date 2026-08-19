@@ -171,7 +171,7 @@ export function GroupMeetingViewContent({
 }: GroupMeetingViewProps & { isMobile: boolean }) {
   const { t } = useI18n();
 
-  if (loading) {
+  if (loading && !meeting) {
     return <div role="status" className="flex h-full items-center justify-center text-text-muted">{t("meeting.loading")}</div>;
   }
 

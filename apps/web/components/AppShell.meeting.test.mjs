@@ -7,8 +7,11 @@ const sidebarSource = await readFile(new URL("./SessionSidebar.tsx", import.meta
 
 test("restores explicit and recent meetings while keeping their cwd in navigation", () => {
   assert.match(source, /useGroupMeeting\(meetingCwd, meetingMode \? initialNavigation\.meetingId : null\)/);
+  assert.match(source, /meetingMode \? initialNavigation\.requestedCwd : null/);
   assert.match(source, /const opened = await openMeeting\(\)/);
   assert.match(source, /buildMeetingNavigationUrl\(opened\.meetingId, opened\.cwd\)/);
+  assert.match(source, /window\.history\.replaceState\(window\.history\.state, "", buildMeetingNavigationUrl\(opened\.meetingId, opened\.cwd\)\)/);
+  assert.match(source, /loading=\{\(meetingLoading \|\| meetingCreating \|\| initialCwdStatus === "validating"\) && !meeting\}/);
 });
 
 test("guards desktop meeting creation and preserves the previous chat", () => {

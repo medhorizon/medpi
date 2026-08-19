@@ -98,7 +98,7 @@ export function useGroupMeeting(cwd: string | null, meetingId: string | null = n
     }
     const generation = ++generationRef.current;
     activeMeetingIdRef.current = normalizedId;
-    setMeeting(null);
+    setMeeting((current) => (current?.meetingId === normalizedId ? current : null));
     setLoading(true);
     setError(null);
     try {
