@@ -357,6 +357,33 @@ test("lazily initializes one canonical workflow and enforces the PI clarificatio
   assert.deepEqual(doctorView.idempotency, {});
 });
 
+test("accepts and dispatches a complete text doctor brief", async () => {
+  const context = await setup();
+  await context.call("pi", question("text-brief-question"));
+  await context.call("pi", {
+    action: "submit_clarification",
+    requestId: "text-brief-answer",
+    questionId: "scope",
+    selectedOptionIds: ["narrow"],
+  });
+  const textBrief = "Lead the scientific workstream and preserve the complete task instructions.";
+  const parsed = parseLabOrchestrateAction({
+    action: "dispatch_doctor",
+    requestId: "text-brief-parse",
+    doctorRole: "phd-2",
+    brief: textBrief,
+  });
+  assert.equal(parsed.brief, textBrief);
+  const dispatched = await context.call("pi", {
+    action: "dispatch_doctor",
+    requestId: "text-brief-dispatch",
+    doctorRole: "phd-2",
+    brief: textBrief,
+  });
+  assert.equal(dispatched.brief, textBrief);
+  assert.equal(dispatched.workPackages[0].doctorRole, "phd-2");
+});
+
 test("persists workflow progress and a diagnostic when a wake-up notice fails", async () => {
   const context = await setup({ deliverNotice: async () => { throw new Error("recipient offline"); } });
   await context.call("pi", question("notice-failure-question"));

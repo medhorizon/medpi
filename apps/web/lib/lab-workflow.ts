@@ -70,12 +70,12 @@ export interface ClarificationResponse {
   answeredAt: string;
 }
 
-export interface ResearchBrief {
+export type ResearchBrief = string | {
   title: string;
   objective: string;
   scope: string;
   constraints: string[];
-}
+};
 
 export interface LiteratureRecord {
   title: string;
@@ -479,6 +479,7 @@ function parseClarificationCards(value: unknown): ClarificationCard[] {
 }
 
 function parseBrief(value: unknown): ResearchBrief {
+  if (typeof value === "string") return textValue(value, "brief");
   const brief = objectValue(value, "brief");
   allowedKeys(brief, ["title", "objective", "scope", "constraints"], "brief");
   return {
