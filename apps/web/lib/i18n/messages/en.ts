@@ -359,7 +359,7 @@ export const enLocale: LocalePlugin = {
     "meeting.creating": "Creating group meeting…",
     "meeting.delete": "Delete group meeting",
     "meeting.deleting": "Deleting group meeting…",
-    "meeting.deleteConfirm": "Delete this group meeting, its six member sessions, and all undergraduate task sessions? This cannot be undone.",
+    "meeting.deleteConfirm": "Delete this group meeting and its workflow? The six member session histories will be kept.",
     "meeting.leave": "Leave group meeting",
     "meeting.desktopStartOnly": "Group meetings can only be created on desktop",
     "meeting.selectProjectFirst": "Select a project first",

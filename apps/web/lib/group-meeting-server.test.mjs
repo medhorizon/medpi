@@ -15,6 +15,7 @@ const {
   deleteGroupMeeting,
   GroupMeetingError,
   getGroupMeetingSessionPolicy,
+  getGroupMeetingSessionStartOptions,
   listGroupMeetings,
   readGroupMeeting,
   resolveGroupMeetingRoster,
@@ -200,6 +201,14 @@ test("creates six distinct sessions, persists them atomically, and restores the 
     modelId: roster[5].modelId,
   });
   assert.equal(restoredPolicy?.thinkingLevel, roster[5].thinkingLevel);
+  assert.deepEqual(getGroupMeetingSessionStartOptions(restoredPolicy), {
+    toolNames: getGroupMeetingToolNames("undergraduate"),
+    initialModel: { provider: roster[5].provider, modelId: roster[5].modelId },
+    thinkingLevel: roster[5].thinkingLevel,
+    persistStartupPreferences: false,
+    fixedToolNames: getGroupMeetingToolNames("undergraduate"),
+    fixedSystemPrompt: getGroupMeetingRoleSystemPrompt("undergraduate"),
+  });
   const [projectDirectory] = await readdir(join(agentDir, "meetings"));
   await writeFile(join(agentDir, "meetings", projectDirectory, `${meeting.meetingId}.workflow.json`), "{}");
   assert.deepEqual((await listGroupMeetings(cwd, agentDir)).map((entry) => entry.meetingId), [meeting.meetingId]);
@@ -209,7 +218,7 @@ test("creates six distinct sessions, persists them atomically, and restores the 
   assert.deepEqual(files.sort(), [`${meeting.meetingId}.json`, `${meeting.meetingId}.workflow.json`].sort());
 });
 
-test("deletes a meeting with its member, undergraduate, workflow, and message records", async () => {
+test("deletes only the meeting and workflow records", async () => {
   const root = await mkdtemp(join(tmpdir(), "medpi-meeting-delete-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");
@@ -231,30 +240,14 @@ test("deletes a meeting with its member, undergraduate, workflow, and message re
   const messageDirectory = join(directory, "lab-messages");
   const messagePath = join(messageDirectory, `${meeting.meetingId}.json`);
   await mkdir(messageDirectory);
-  await writeFile(workflowPath, JSON.stringify({
-    meetingId: meeting.meetingId,
-    cwd,
-    undergradThreads: [{ sessionId: "undergrad-child-1" }, { sessionId: "undergrad-child-2" }],
-  }));
+  await writeFile(workflowPath, "{}");
   await writeFile(messagePath, "{}");
 
-  const deletedSessionIds = [];
-  await deleteGroupMeeting(cwd, meeting.meetingId, {
-    agentDir,
-    deleteSession: async (sessionId) => {
-      deletedSessionIds.push(sessionId);
-      return true;
-    },
-  });
+  await deleteGroupMeeting(cwd, meeting.meetingId, agentDir);
 
-  assert.deepEqual(deletedSessionIds, [
-    "undergrad-child-1",
-    "undergrad-child-2",
-    ...meeting.members.map((member) => member.sessionId),
-  ]);
   assert.equal(await readGroupMeeting(cwd, meeting.meetingId, agentDir), null);
   assert.equal(existsSync(workflowPath), false);
-  assert.equal(existsSync(messagePath), false);
+  assert.equal(existsSync(messagePath), true);
 });
 
 test("applies only changed settings and persists the six-role configuration", async () => {
@@ -317,22 +310,6 @@ test("cold-restores an undergraduate child with the fixed isolated policy", asyn
   const agentDir = join(root, "agent");
   const projectDirectory = join(agentDir, "meetings", "project-key");
   await mkdir(projectDirectory, { recursive: true });
-  await writeFile(join(projectDirectory, "meeting-id.json"), JSON.stringify({
-    meetingId: "meeting-id",
-    cwd: join(root, "project"),
-    projectRoot: join(root, "project"),
-    createdAt: "2026-08-19T00:00:00.000Z",
-    status: "ready",
-    members: ["pi", "phd-1", "phd-2", "master-1", "master-2", "undergraduate"].map((role) => ({
-      role,
-      label: role,
-      sessionId: `${role}-session`,
-      provider: role === "undergraduate" ? "student-provider" : "test-provider",
-      modelId: role === "undergraduate" ? "student-model" : "test-model",
-      thinkingLevel: role === "undergraduate" ? "high" : "off",
-      status: "ready",
-    })),
-  }));
   await writeFile(join(projectDirectory, "meeting.workflow.json"), JSON.stringify({
     version: 1,
     meetingId: "meeting-id",
@@ -345,8 +322,8 @@ test("cold-restores an undergraduate child with the fixed isolated policy", asyn
   assert.equal(policy?.role, "undergraduate");
   assert.deepEqual(policy?.toolNames, ["science_search", "science_fetch", "lab_orchestrate"]);
   assert.match(policy?.systemPrompt ?? "", /isolated child worker/i);
-  assert.deepEqual(policy?.initialModel, { provider: "student-provider", modelId: "student-model" });
-  assert.equal(policy?.thinkingLevel, "high");
+  assert.equal(policy?.initialModel, undefined);
+  assert.equal(policy?.thinkingLevel, undefined);
 });
 
 test("concurrent creates never merge meeting or session ids", async () => {

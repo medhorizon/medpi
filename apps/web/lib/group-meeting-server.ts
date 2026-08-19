@@ -22,7 +22,7 @@ import { resolveVisibleModels } from "./model-scope";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { bindLabWorkflowRuntime, resolveLabWorkflowChildSessionPolicy } from "./lab-workflow";
 import { getRpcSession, startRpcSession } from "./rpc-manager";
-import { invalidateSessionListCache, invalidateSessionPathCache, resolveSessionPath } from "./session-reader";
+import { resolveSessionPath } from "./session-reader";
 import { resolveProject } from "./worktree";
 
 bindLabWorkflowRuntime();
@@ -50,17 +50,23 @@ interface MeetingSettingsDependencies {
   visibleModels?: readonly Model<Api>[];
 }
 
-interface MeetingDeletionDependencies {
-  agentDir?: string;
-  deleteSession?: (sessionId: string) => Promise<boolean>;
-}
-
 export interface GroupMeetingSessionPolicy {
   role: GroupMeetingRole;
   toolNames: string[];
   systemPrompt: string;
   initialModel?: { provider: string; modelId: string };
   thinkingLevel?: GroupMeetingThinkingLevel;
+}
+
+export function getGroupMeetingSessionStartOptions(policy: GroupMeetingSessionPolicy) {
+  return {
+    toolNames: policy.toolNames,
+    ...(policy.initialModel ? { initialModel: policy.initialModel } : {}),
+    ...(policy.thinkingLevel ? { thinkingLevel: policy.thinkingLevel } : {}),
+    persistStartupPreferences: false,
+    fixedToolNames: policy.toolNames,
+    fixedSystemPrompt: policy.systemPrompt,
+  };
 }
 
 export function getGroupMeetingSessionPolicy(
@@ -315,67 +321,17 @@ export async function readGroupMeeting(
   }
 }
 
-async function readWorkflowChildSessionIds(
-  meeting: GroupMeeting,
-  agentDir: string,
-): Promise<string[]> {
-  try {
-    const value = JSON.parse(
-      await readFile(join(meetingDirectory(meeting.cwd, agentDir), `${meeting.meetingId}.workflow.json`), "utf8"),
-    ) as { meetingId?: unknown; cwd?: unknown; undergradThreads?: unknown };
-    if (value.meetingId !== meeting.meetingId || value.cwd !== meeting.cwd || !Array.isArray(value.undergradThreads)) {
-      throw new GroupMeetingError("Invalid lab workflow metadata", "invalid_metadata");
-    }
-    return value.undergradThreads.map((thread) => {
-      const sessionId = typeof thread === "object" && thread !== null && "sessionId" in thread
-        ? (thread as { sessionId?: unknown }).sessionId
-        : null;
-      if (typeof sessionId !== "string" || !sessionId) {
-        throw new GroupMeetingError("Invalid undergraduate session metadata", "invalid_metadata");
-      }
-      return sessionId;
-    });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-async function deleteMeetingSession(sessionId: string): Promise<boolean> {
-  const filePath = await resolveSessionPath(sessionId);
-  if (!filePath) return false;
-  await getRpcSession(sessionId)?.shutdown();
-  await unlink(filePath);
-  invalidateSessionPathCache(sessionId);
-  invalidateSessionListCache();
-  return true;
-}
-
 export async function deleteGroupMeeting(
   requestedCwd: string,
   meetingId: string,
-  dependencies: MeetingDeletionDependencies = {},
+  agentDir = getAgentDir(),
 ): Promise<void> {
-  const agentDir = dependencies.agentDir ?? getAgentDir();
   const meeting = await readGroupMeeting(requestedCwd, meetingId, agentDir);
   if (!meeting) throw new GroupMeetingError("Meeting not found", "meeting_not_found");
-
-  const childSessionIds = await readWorkflowChildSessionIds(meeting, agentDir);
-  const memberSessionIds = meeting.members.flatMap((member) => member.sessionId ? [member.sessionId] : []);
-  const deleteSession = dependencies.deleteSession ?? deleteMeetingSession;
-  for (const sessionId of new Set([...childSessionIds, ...memberSessionIds])) {
-    await deleteSession(sessionId);
-  }
-
-  const directory = meetingDirectory(meeting.cwd, agentDir);
-  for (const path of [
-    join(directory, `${meeting.meetingId}.workflow.json`),
-    join(directory, "lab-messages", `${meeting.meetingId}.json`),
-  ]) {
-    await unlink(path).catch((error: NodeJS.ErrnoException) => {
+  await unlink(join(meetingDirectory(meeting.cwd, agentDir), `${meeting.meetingId}.workflow.json`))
+    .catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") throw error;
     });
-  }
   await unlink(meetingPath(meeting.cwd, meeting.meetingId, agentDir));
 }
 
@@ -388,9 +344,14 @@ async function applyMemberSettings(
   if (!session?.isAlive()) {
     const sessionFile = await resolveSessionPath(member.sessionId);
     if (!sessionFile) throw new Error(`Session not found: ${member.sessionId}`);
+    const toolNames = getGroupMeetingToolNames(member.role);
     ({ session } = await startRpcSession(member.sessionId, sessionFile, undefined, {
+      toolNames,
       initialModel: { provider: settings.provider, modelId: settings.modelId },
       thinkingLevel: settings.thinkingLevel,
+      persistStartupPreferences: false,
+      fixedToolNames: toolNames,
+      fixedSystemPrompt: getGroupMeetingRoleSystemPrompt(member.role),
     }));
   }
 
@@ -501,33 +462,20 @@ export async function resolveGroupMeetingSessionPolicy(
     throw error;
   }
 
-  const meetings = new Map<string, GroupMeeting>();
   for (const projectDirectory of projectDirectories) {
     if (!projectDirectory.isDirectory()) continue;
     const directory = join(agentDir, "meetings", projectDirectory.name);
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name.endsWith(".workflow.json")) continue;
-      const meeting = parseMeeting(await readFile(join(directory, entry.name), "utf8"));
-      meetings.set(meeting.meetingId, meeting);
-      const policy = getGroupMeetingSessionPolicy(meeting, sessionId);
+      const policy = getGroupMeetingSessionPolicy(
+        parseMeeting(await readFile(join(directory, entry.name), "utf8")),
+        sessionId,
+      );
       if (policy) return policy;
     }
   }
-  const child = await resolveLabWorkflowChildSessionPolicy(sessionId, agentDir);
-  if (!child) return null;
-  const meeting = meetings.get(child.meetingId);
-  const undergraduate = meeting?.members.find((member) => member.role === "undergraduate");
-  if (!undergraduate?.provider || !undergraduate.modelId || !undergraduate.thinkingLevel) {
-    throw new GroupMeetingError("Undergraduate model settings are unavailable", "invalid_metadata", "undergraduate");
-  }
-  return {
-    role: child.role,
-    toolNames: child.toolNames,
-    systemPrompt: child.systemPrompt,
-    initialModel: { provider: undergraduate.provider, modelId: undergraduate.modelId },
-    thinkingLevel: undergraduate.thinkingLevel,
-  };
+  return resolveLabWorkflowChildSessionPolicy(sessionId, agentDir);
 }
 
 export async function listGroupMeetings(

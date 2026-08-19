@@ -384,17 +384,18 @@ test("accepts and dispatches a complete text doctor brief", async () => {
   assert.equal(dispatched.workPackages[0].doctorRole, "phd-2");
 });
 
-test("cold workflow deliveries delegate group-session binding to the RPC startup layer", async () => {
+test("cold workflow deliveries pin the configured role model and thinking level", async () => {
   const source = await readFile(new URL("./lab-workflow.ts", import.meta.url), "utf8");
   const functionNames = ["defaultDeliverTask", "defaultDeliverMasterTask", "defaultDeliverNotice"];
   for (let index = 0; index < functionNames.length; index += 1) {
     const start = source.indexOf(`async function ${functionNames[index]}`);
     const end = index + 1 < functionNames.length
       ? source.indexOf(`async function ${functionNames[index + 1]}`)
-      : source.indexOf("async function applyAction");
+      : source.length;
     const delivery = source.slice(start, end);
-    assert.match(delivery, /startRpcSession\(/);
-    assert.doesNotMatch(delivery, /initialModel:|thinkingLevel:|persistStartupPreferences:/);
+    assert.match(delivery, /initialModel:/);
+    assert.match(delivery, /thinkingLevel:/);
+    assert.match(delivery, /persistStartupPreferences: false/);
   }
 });
 

@@ -359,7 +359,7 @@ export const zhCNLocale: LocalePlugin = {
     "meeting.creating": "正在创建组会…",
     "meeting.delete": "删除组会",
     "meeting.deleting": "正在删除组会…",
-    "meeting.deleteConfirm": "删除此组会、六个成员会话及全部本科任务会话？此操作无法撤销。",
+    "meeting.deleteConfirm": "删除此组会及其工作流？六个成员会话历史将保留。",
     "meeting.leave": "退出组会",
     "meeting.desktopStartOnly": "组会仅可在桌面端创建",
     "meeting.selectProjectFirst": "请先选择项目",

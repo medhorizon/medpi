@@ -114,7 +114,7 @@ test("RPC session startup persists explicit preferences without replaying setter
 
   assert.match(startupSource, /persistExplicitStartupPreferences\(/);
   assert.match(startupSource, /modelDefaultChanged\) invalidateModelsCache\(\)/);
-  assert.match(startupSource, /if \(shouldPersistStartupPreferences\)/);
+  assert.match(startupSource, /if \(persistStartupPreferences\)/);
 });
 
 test("ordinary new sessions keep legacy persistence while meetings persist empty sessions only", async () => {
@@ -176,13 +176,7 @@ test("explicit tool names are an exact registered-tool intersection", () => {
   assert.deepEqual(legacyCalls, [["read", "science_fetch", "science_run"]]);
 });
 
-test("group-session restores bind centrally in RPC startup and never in frontend routes", async () => {
-  const rpcSource = await readFile(new URL("./rpc-manager.ts", import.meta.url), "utf8");
-  const startupSource = rpcSource.slice(rpcSource.indexOf("export async function startRpcSession"));
-  assert.match(startupSource, /resolveGroupMeetingSessionPolicy\(sessionId, agentDir\)/);
-  assert.match(startupSource, /const boundModel = initialModel \?\? meetingPolicy\?\.initialModel/);
-  assert.match(startupSource, /const boundThinkingLevel = thinkingLevel \?\? meetingPolicy\?\.thinkingLevel/);
-  assert.match(startupSource, /const shouldPersistStartupPreferences = meetingPolicy \? false : persistStartupPreferences/);
+test("group-session restores use the server-side policy and never a frontend role", async () => {
   const routes = [
     "../app/api/agent/[id]/route.ts",
     "../app/api/agent/[id]/events/route.ts",
@@ -190,8 +184,8 @@ test("group-session restores bind centrally in RPC startup and never in frontend
   ];
   for (const route of routes) {
     const source = await readFile(new URL(route, import.meta.url), "utf8");
-    assert.match(source, /startRpcSession\(id, filePath, undefined\)/);
-    assert.doesNotMatch(source, /resolveGroupMeetingSessionPolicy|getGroupMeetingSessionStartOptions/);
+    assert.match(source, /resolveGroupMeetingSessionPolicy\(id\)/);
+    assert.match(source, /getGroupMeetingSessionStartOptions\(meetingPolicy\)/);
     assert.doesNotMatch(source, /body\.role|command\.role/);
   }
 });

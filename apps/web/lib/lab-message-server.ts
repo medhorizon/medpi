@@ -10,6 +10,8 @@ import {
   type LabScienceDatabaseAuthorizationInput,
 } from "@medpi/lab/runtime";
 import {
+  getGroupMeetingRoleSystemPrompt,
+  getGroupMeetingToolNames,
   type GroupMeeting,
   type GroupMeetingMember,
   type GroupMeetingRole,
@@ -142,12 +144,22 @@ function inboundPrompt(message: LabMessage): string {
 }
 
 async function deliverToSession(recipient: GroupMeetingMember, message: LabMessage): Promise<"prompt" | "follow_up"> {
-  if (!recipient.sessionId) throw new LabMessageError("Recipient session is unavailable", "recipient_unavailable");
+  if (!recipient.sessionId || !recipient.provider || !recipient.modelId || !recipient.thinkingLevel) {
+    throw new LabMessageError("Recipient session is unavailable", "recipient_unavailable");
+  }
   let session = getRpcSession(recipient.sessionId);
   if (!session?.isAlive()) {
     const sessionFile = await resolveSessionPath(recipient.sessionId);
     if (!sessionFile) throw new LabMessageError("Recipient session is unavailable", "recipient_unavailable");
-    ({ session } = await startRpcSession(recipient.sessionId, sessionFile, undefined));
+    const toolNames = getGroupMeetingToolNames(recipient.role);
+    ({ session } = await startRpcSession(recipient.sessionId, sessionFile, undefined, {
+      toolNames,
+      initialModel: { provider: recipient.provider, modelId: recipient.modelId },
+      thinkingLevel: recipient.thinkingLevel,
+      persistStartupPreferences: false,
+      fixedToolNames: toolNames,
+      fixedSystemPrompt: getGroupMeetingRoleSystemPrompt(recipient.role),
+    }));
   }
   const state = await session.send({ type: "get_state" }) as {
     isStreaming?: boolean;

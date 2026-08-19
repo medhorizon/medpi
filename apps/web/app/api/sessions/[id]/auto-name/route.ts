@@ -3,6 +3,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { generateSessionTitle } from "@/lib/session-title";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
 import { invalidateSessionListCache, resolveSessionPath } from "@/lib/session-reader";
+import { getGroupMeetingSessionStartOptions, resolveGroupMeetingSessionPolicy } from "@/lib/group-meeting-server";
 
 export async function POST(
   _req: Request,
@@ -19,7 +20,12 @@ export async function POST(
     const existing = getRpcSession(id);
     const { session } = existing?.isAlive()
       ? { session: existing }
-      : await startRpcSession(id, filePath, undefined);
+      : await (async () => {
+        const meetingPolicy = await resolveGroupMeetingSessionPolicy(id);
+        return startRpcSession(id, filePath, undefined, meetingPolicy
+          ? getGroupMeetingSessionStartOptions(meetingPolicy)
+          : {});
+      })();
 
     // globalThis keeps wrappers alive across dev hot reloads; older instances
     // may predate waitUntilReady(), but those have already completed startup.
