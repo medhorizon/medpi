@@ -57,6 +57,10 @@ export interface ClarificationCard {
   options: Array<{ id: string; label: string }>;
   allowOther: boolean;
   required: boolean;
+  selectionMode?: "single" | "multiple";
+  title?: string;
+  description?: string;
+  submitLabel?: string;
 }
 
 export interface ClarificationResponse {
@@ -269,7 +273,7 @@ interface UndergradSubmissionInput extends UndergradResult {
 
 export type LabOrchestrateAction =
   | { action: "get_state" }
-  | { action: "ask_clarification"; requestId: string; card: ClarificationCard }
+  | { action: "ask_clarification"; requestId: string; cards: ClarificationCard[] }
   | { action: "submit_clarification"; requestId: string; questionId: string; selectedOptionIds: string[]; freeText?: string }
   | { action: "dispatch_doctor"; requestId: string; doctorRole: DoctorRole; brief: ResearchBrief }
   | { action: "delegate_undergrad"; requestId: string; workPackageId?: string; purpose: "scientific_retrieval" | "clerical_supplement"; workType: UndergradTask["workType"]; databaseScope?: LiteratureDatabase[]; title: string; objective: string; instructions: string[]; inputRefs: string[]; acceptanceCriteria: string[]; maxThreads: number }
@@ -415,27 +419,63 @@ function parseLiteratureDatabaseScope(value: unknown): LiteratureDatabase[] {
   return ["pubmed", "crossref", ...(unique.has("arxiv") ? ["arxiv" as const] : [])];
 }
 
-function parseCard(value: unknown): ClarificationCard {
-  const card = objectValue(value, "card");
-  allowedKeys(card, ["questionId", "question", "options", "allowOther", "required"], "card");
-  if (!Array.isArray(card.options) || card.options.length < 2 || card.options.length > 8) {
-    throw new LabWorkflowError("card.options must contain 2-8 entries", "invalid_action");
+function parseClarificationOptions(value: unknown, label: string): Array<{ id: string; label: string }> {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 8) {
+    throw new LabWorkflowError(`${label} must contain 2-8 entries`, "invalid_action");
   }
-  const options = card.options.map((entry, index) => {
-    const option = objectValue(entry, `card.options[${index}]`);
-    allowedKeys(option, ["id", "label"], `card.options[${index}]`);
-    return { id: idValue(option.id, `card.options[${index}].id`), label: textValue(option.label, `card.options[${index}].label`, MAX_SHORT_TEXT) };
+  const options = value.map((entry, index) => {
+    const option = objectValue(entry, `${label}[${index}]`);
+    allowedKeys(option, ["id", "label"], `${label}[${index}]`);
+    return { id: idValue(option.id, `${label}[${index}].id`), label: textValue(option.label, `${label}[${index}].label`, MAX_SHORT_TEXT) };
   });
   if (new Set(options.map((option) => option.id)).size !== options.length) {
     throw new LabWorkflowError("card option ids must be unique", "invalid_action");
   }
+  return options;
+}
+
+function parseCard(value: unknown): ClarificationCard {
+  const card = objectValue(value, "card");
+  allowedKeys(card, ["questionId", "question", "options", "allowOther", "required"], "card");
   return {
     questionId: idValue(card.questionId, "card.questionId"),
     question: textValue(card.question, "card.question"),
-    options,
+    options: parseClarificationOptions(card.options, "card.options"),
     allowOther: booleanValue(card.allowOther, "card.allowOther"),
     required: booleanValue(card.required, "card.required"),
   };
+}
+
+function parseClarificationCards(value: unknown): ClarificationCard[] {
+  const card = objectValue(value, "card");
+  if (!("questions" in card)) return [parseCard(card)];
+  allowedKeys(card, ["title", "description", "questions", "submitLabel"], "card");
+  if (!Array.isArray(card.questions) || card.questions.length < 1 || card.questions.length > 8) {
+    throw new LabWorkflowError("card.questions must contain 1-8 entries", "invalid_action");
+  }
+  const title = textValue(card.title, "card.title", MAX_SHORT_TEXT);
+  const description = textValue(card.description, "card.description");
+  const submitLabel = textValue(card.submitLabel, "card.submitLabel", MAX_SHORT_TEXT);
+  const cards = card.questions.map((entry, index) => {
+    const question = objectValue(entry, `card.questions[${index}]`);
+    allowedKeys(question, ["id", "prompt", "type", "options"], `card.questions[${index}]`);
+    return {
+      questionId: idValue(question.id, `card.questions[${index}].id`),
+      question: textValue(question.prompt, `card.questions[${index}].prompt`),
+      options: parseClarificationOptions(question.options, `card.questions[${index}].options`),
+      allowOther: false,
+      required: true,
+      selectionMode: enumValue(question.type, ["single_select", "multiple_select"], `card.questions[${index}].type`) === "single_select"
+        ? "single" as const
+        : "multiple" as const,
+      ...(index === 0 ? { title, description } : {}),
+      submitLabel,
+    };
+  });
+  if (new Set(cards.map((entry) => entry.questionId)).size !== cards.length) {
+    throw new LabWorkflowError("card question ids must be unique", "invalid_action");
+  }
+  return cards;
 }
 
 function parseBrief(value: unknown): ResearchBrief {
@@ -556,7 +596,7 @@ export function parseLabOrchestrateAction(value: unknown): LabOrchestrateAction 
   switch (action) {
     case "ask_clarification":
       allowedKeys(raw, ["action", "requestId", "card"], "action");
-      return { action, requestId, card: parseCard(raw.card) };
+      return { action, requestId, cards: parseClarificationCards(raw.card) };
     case "submit_clarification": {
       allowedKeys(raw, ["action", "requestId", "questionId", "selectedOptionIds", "freeText"], "action");
       return { action, requestId, questionId: idValue(raw.questionId, "action.questionId"), selectedOptionIds: stringArray(raw.selectedOptionIds, "action.selectedOptionIds"), ...(raw.freeText === undefined ? {} : { freeText: textValue(raw.freeText, "action.freeText") }) };
@@ -1134,8 +1174,11 @@ async function applyAction(
     case "ask_clarification": {
       requireMember(actor, ["pi"]);
       if (!new Set<WorkflowStatus>(["clarifying", "awaiting_user_input"]).has(workflow.status)) throw new LabWorkflowError("Clarifications are closed", "stage_violation");
-      if (workflow.clarificationCards.some((card) => card.questionId === action.card.questionId)) throw new LabWorkflowError("Clarification question already exists", "duplicate_question");
-      workflow.clarificationCards.push(action.card);
+      const questionIds = action.cards.map((card) => card.questionId);
+      if (new Set(questionIds).size !== questionIds.length || workflow.clarificationCards.some((card) => questionIds.includes(card.questionId))) {
+        throw new LabWorkflowError("Clarification question already exists", "duplicate_question");
+      }
+      workflow.clarificationCards.push(...action.cards);
       workflow.status = "awaiting_user_input";
       break;
     }

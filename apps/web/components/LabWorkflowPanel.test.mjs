@@ -20,6 +20,8 @@ test("keeps structured controls limited to PI clarification cards", () => {
   assert.match(panelSource, /action: "submit_clarification"/);
   assert.match(panelSource, /selectedOptionIds: selected/);
   assert.match(panelSource, /freeText: freeText\.trim\(\)/);
+  assert.match(panelSource, /card\.selectionMode === "single" \? "radio" : "checkbox"/);
+  assert.match(panelSource, /card\.submitLabel \?\? t\("meeting\.workflowSubmit"\)/);
   assert.match(panelSource, /member\.role === "phd-1"/);
   assert.match(panelSource, /member\.role === "master-1"/);
   assert.match(panelSource, /member\.role === "undergraduate"/);

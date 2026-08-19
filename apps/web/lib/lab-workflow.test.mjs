@@ -11,6 +11,7 @@ const {
   authorizeUndergraduateScienceDatabase,
   LabWorkflowError,
   orchestrateLabWorkflow,
+  parseLabOrchestrateAction,
   readLabWorkflow,
   resolveLabWorkflowChildSessionPolicy,
 } = await jiti.import("./lab-workflow.ts");
@@ -91,6 +92,29 @@ function question(requestId = "ask-1") {
     },
   };
 }
+
+test("accepts a typed multi-question clarification card", () => {
+  const action = parseLabOrchestrateAction({
+    action: "ask_clarification",
+    requestId: "clarify-1",
+    card: {
+      title: "Financing scope",
+      description: "Confirm the assumptions before research starts.",
+      questions: [
+        { id: "jurisdiction", prompt: "Which market?", type: "single_select", options: [{ id: "cn", label: "China" }, { id: "us", label: "United States" }] },
+        { id: "deliverables", prompt: "Which deliverables?", type: "multiple_select", options: [{ id: "memo", label: "Memo" }, { id: "deck", label: "Deck" }] },
+      ],
+      submitLabel: "Confirm",
+    },
+  });
+  assert.equal(action.action, "ask_clarification");
+  assert.deepEqual(action.cards.map(({ questionId, selectionMode }) => ({ questionId, selectionMode })), [
+    { questionId: "jurisdiction", selectionMode: "single" },
+    { questionId: "deliverables", selectionMode: "multiple" },
+  ]);
+  assert.equal(action.cards[0].title, "Financing scope");
+  assert.equal(action.cards[1].title, undefined);
+});
 
 const brief = {
   title: "Test brief",

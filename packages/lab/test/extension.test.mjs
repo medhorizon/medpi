@@ -24,6 +24,7 @@ test("lab_orchestrate exposes the canonical action vocabulary and payload guidan
   const orchestrateTool = source.slice(source.indexOf('name: "lab_orchestrate"'));
   assert.doesNotMatch(orchestrateTool, /meetingId: Type\.String/);
   assert.match(source, /Every mutating action payload requires a unique requestId/);
+  assert.match(source, /one questionnaire \{requestId,card:\{title,description,questions/);
   assert.match(source, /Robust synthesis requires counterEvidence, sensitivityChecks, uncertainties/);
   assert.match(source, /databaseScope defaults to \[pubmed,crossref\], may explicitly add arxiv/);
   assert.match(source, /rejects all other databases/);

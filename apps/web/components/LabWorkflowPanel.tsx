@@ -62,45 +62,52 @@ function ClarificationCard({
   };
 
   return (
-    <fieldset className="rounded border border-border bg-bg px-2 py-1.5" disabled={disabled}>
-      <legend className="px-1 text-[11px] font-medium text-text">{card.question}{card.required ? " *" : ""}</legend>
-      <div className="space-y-1">
-        {card.options.map((option) => (
-          <label key={option.id} className="flex cursor-pointer items-center gap-1.5 text-[11px] text-text">
-            <input
-              type="checkbox"
-              checked={selected.includes(option.id)}
-              onChange={() => setSelected((current) => current.includes(option.id)
-                ? current.filter((id) => id !== option.id)
-                : [...current, option.id])}
-            />
-            {option.label}
-          </label>
-        ))}
-      </div>
-      {card.allowOther && (
-        <textarea
-          className="mt-1 w-full resize-y rounded border border-border bg-bg px-1.5 py-1 text-[11px] text-text"
-          value={freeText}
-          onChange={(event) => setFreeText(event.target.value)}
-          placeholder={t("meeting.workflowOther")}
-          rows={2}
-        />
-      )}
-      {answered ? (
-        <p className="mt-1 text-[11px] text-text-muted">{t("meeting.workflowAnswered")}</p>
-      ) : (
-        <button
-          type="button"
-          className="mt-1 rounded border border-border px-2 py-1 text-[11px] text-text disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={!canSubmit || submitting}
-          onClick={() => { void submit(); }}
-        >
-          {submitting ? t("meeting.workflowSubmitting") : t("meeting.workflowSubmit")}
-        </button>
-      )}
-      {submitError && <p role="alert" className="mt-1 text-[11px] text-red-400">{submitError}</p>}
-    </fieldset>
+    <div className="rounded border border-border bg-bg px-2 py-1.5">
+      {card.title && <strong className="block text-xs text-text">{card.title}</strong>}
+      {card.description && <p className="mb-1 text-[10px] leading-4 text-text-muted">{card.description}</p>}
+      <fieldset disabled={disabled}>
+        <legend className="px-1 text-[11px] font-medium text-text">{card.question}{card.required ? " *" : ""}</legend>
+        <div className="space-y-1">
+          {card.options.map((option) => (
+            <label key={option.id} className="flex cursor-pointer items-center gap-1.5 text-[11px] text-text">
+              <input
+                type={card.selectionMode === "single" ? "radio" : "checkbox"}
+                name={card.selectionMode === "single" ? card.questionId : undefined}
+                checked={selected.includes(option.id)}
+                onChange={() => setSelected((current) => card.selectionMode === "single"
+                  ? [option.id]
+                  : current.includes(option.id)
+                    ? current.filter((id) => id !== option.id)
+                    : [...current, option.id])}
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+        {card.allowOther && (
+          <textarea
+            className="mt-1 w-full resize-y rounded border border-border bg-bg px-1.5 py-1 text-[11px] text-text"
+            value={freeText}
+            onChange={(event) => setFreeText(event.target.value)}
+            placeholder={t("meeting.workflowOther")}
+            rows={2}
+          />
+        )}
+        {answered ? (
+          <p className="mt-1 text-[11px] text-text-muted">{t("meeting.workflowAnswered")}</p>
+        ) : (
+          <button
+            type="button"
+            className="mt-1 rounded border border-border px-2 py-1 text-[11px] text-text disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!canSubmit || submitting}
+            onClick={() => { void submit(); }}
+          >
+            {submitting ? t("meeting.workflowSubmitting") : card.submitLabel ?? t("meeting.workflowSubmit")}
+          </button>
+        )}
+        {submitError && <p role="alert" className="mt-1 text-[11px] text-red-400">{submitError}</p>}
+      </fieldset>
+    </div>
   );
 }
 
