@@ -301,11 +301,25 @@ async function acceptRetrieval(context, doctorRole, workPackageId, prefix, revis
       taskId: task.taskId,
       decision: "revision_requested",
     });
+    workflow = await context.call("undergraduate", {
+      action: "spawn_undergrad_threads",
+      requestId: `${prefix}-spawn-2`,
+      taskId: task.taskId,
+      threads: [threadSpec(`${prefix}-2`)],
+    });
+    const retry = workflow.undergradThreads.find((candidate) => candidate.parentTaskId === task.taskId && candidate.attempt === 2);
+    await context.call(retry.sessionId, {
+      action: "submit_undergrad_thread",
+      requestId: `${prefix}-thread-submit-2`,
+      taskId: task.taskId,
+      threadId: retry.threadId,
+      result: literatureResult(`${prefix} revised paper`),
+    });
     await context.call("undergraduate", {
       action: "submit_undergrad_records",
       requestId: `${prefix}-parent-resubmit`,
       taskId: task.taskId,
-      result: { ...literatureResult(`${prefix} revised paper`), threadIds: [thread.threadId] },
+      result: { ...literatureResult(`${prefix} revised paper`), threadIds: [thread.threadId, retry.threadId] },
     });
   }
   await context.call(doctorRole, {
@@ -759,6 +773,15 @@ test("keeps undergraduate revision as an open required action until spawn, not c
 
   const afterChat = await context.call("undergraduate", { action: "get_state" });
   assert.equal(afterChat.undergradTasks.find((entry) => entry.taskId === task.taskId).requiredAction.status, "open");
+  await assert.rejects(
+    () => context.call("undergraduate", {
+      action: "submit_undergrad_records",
+      requestId: "rev-gate-skip-spawn",
+      taskId: task.taskId,
+      result: { ...literatureResult("skipped spawn"), threadIds: [thread.threadId] },
+    }),
+    (error) => error instanceof LabWorkflowError && error.code === "stage_violation",
+  );
 
   workflow = await context.call("undergraduate", {
     action: "spawn_undergrad_threads",
