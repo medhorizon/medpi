@@ -1,5 +1,8 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { buildMeetingCheckpoint, digestRecentMessages, type CompactReason } from "../src/checkpoint";
 import { getLabRuntime } from "../src/runtime";
 
 const ROLE_NAMES = ["pi", "phd-1", "phd-2", "master-1", "master-2"] as const;
@@ -37,7 +40,51 @@ function toolText(result: unknown): string {
   return JSON.stringify(result);
 }
 
+/**
+ * Before a meeting session is context-compacted, dump a readable checkpoint so
+ * the meeting's structured state and recent discussion survive summarization.
+ * Best-effort only: any failure here must never abort the compaction itself.
+ */
+async function writeMeetingCheckpoint(event: SessionBeforeCompactEvent, ctx: ExtensionContext): Promise<void> {
+  if (event.signal.aborted) return;
+  const reason: CompactReason = event.reason === "manual" || event.reason === "overflow" ? event.reason : "threshold";
+  const sessionId = ctx.sessionManager.getSessionId();
+  // Only meeting sessions resolve a workflow; ordinary science sessions throw and skip.
+  const workflow = await getLabRuntime().orchestrate({
+    cwd: ctx.cwd,
+    actorSessionId: sessionId,
+    action: "get_state",
+    payload: {},
+  });
+  if (workflow === null || typeof workflow !== "object") return;
+  const meetingId = typeof (workflow as { meetingId?: unknown }).meetingId === "string"
+    ? (workflow as { meetingId: string }).meetingId
+    : "";
+  if (!meetingId) return;
+  const createdAt = new Date().toISOString();
+  const markdown = buildMeetingCheckpoint({
+    meetingId,
+    sessionId,
+    cwd: ctx.cwd,
+    reason,
+    createdAt,
+    workflow,
+    recentLines: digestRecentMessages(event.branchEntries ?? []),
+  });
+  const directory = join(resolve(ctx.cwd), ".pi", "medpi", "checkpoints");
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, `${meetingId}-${createdAt.replace(/[:.]/g, "-")}.md`), markdown, "utf8");
+}
+
 export default function lab(pi: ExtensionAPI) {
+  pi.on("session_before_compact", async (event, ctx) => {
+    try {
+      await writeMeetingCheckpoint(event, ctx);
+    } catch {
+      // Best-effort checkpoint: never let a failed dump abort compaction.
+    }
+  });
+
   pi.registerTool({
     name: "lab_send_message",
     label: "Lab message",
