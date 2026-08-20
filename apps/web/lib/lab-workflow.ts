@@ -26,6 +26,8 @@ const MAX_SHORT_TEXT = 240;
 const MAX_TEXT = 12_000;
 const MAX_ARRAY = 64;
 const MAX_RECORDS = 200;
+export const REVISION_NUDGE_AFTER_MS = 12 * 60 * 1000;
+export const REVISION_ESCALATE_AFTER_MS = 24 * 60 * 1000;
 
 type SeniorRole = Exclude<GroupMeetingRole, "undergraduate">;
 type DoctorRole = Extract<GroupMeetingRole, "phd-1" | "phd-2">;
@@ -113,6 +115,21 @@ export interface UndergradThread {
   updatedAt: string;
 }
 
+export type LabNoticeKind = "informational" | "required";
+
+export interface UndergradRequiredAction {
+  kind: "spawn_revision_threads";
+  status: "open" | "satisfied";
+  requestedAt: string;
+  lastDeliveredAt: string;
+  lastNudgedAt?: string;
+  nudgeCount: number;
+  stalledNotifiedAt?: string;
+  comments?: string;
+  gapThreadIds?: string[];
+  missingCriteria?: string[];
+}
+
 export interface UndergradTask {
   taskId: string;
   requesterRole: SeniorRole;
@@ -131,6 +148,7 @@ export interface UndergradTask {
   attempt: number;
   threadIds: string[];
   submission?: UndergradResult;
+  requiredAction?: UndergradRequiredAction;
   createdAt: string;
   updatedAt: string;
 }
@@ -215,11 +233,13 @@ export type LabWorkflowNoticeEvent =
   | "undergrad_revision_requested"
   | "master_analysis_submitted"
   | "doctor_synthesis_submitted"
-  | "doctor_revision_requested";
+  | "doctor_revision_requested"
+  | "coordinator_stalled";
 
 export interface LabWorkflowNotice {
   noticeId: string;
   event: LabWorkflowNoticeEvent;
+  kind: LabNoticeKind;
   toRole: GroupMeetingRole;
   toSessionId: string;
   payload: Record<string, unknown>;
@@ -280,7 +300,7 @@ export type LabOrchestrateAction =
   | { action: "spawn_undergrad_threads"; requestId: string; taskId: string; threads: ThreadSpecInput[] }
   | { action: "submit_undergrad_thread"; requestId: string; taskId: string; threadId: string; result: UndergradSubmissionInput }
   | { action: "submit_undergrad_records"; requestId: string; taskId: string; result: UndergradSubmissionInput }
-  | { action: "review_undergrad_records"; requestId: string; taskId: string; decision: "accepted" | "revision_requested" }
+  | { action: "review_undergrad_records"; requestId: string; taskId: string; decision: "accepted" | "revision_requested"; comments?: string; gapThreadIds?: string[]; missingCriteria?: string[] }
   | { action: "submit_pre_master_judgment"; requestId: string; workPackageId: string; judgment: string; evidenceRefs: string[] }
   | { action: "claim_master"; requestId: string; workPackageId: string; preferredMasterRole?: MasterRole; inputRefs: string[]; expectedOutput: string }
   | { action: "release_master"; requestId: string; masterRequestId: string }
@@ -337,6 +357,8 @@ export interface LabWorkflowOptions {
   deliverNotice?: (input: LabNoticeDeliveryInput) => Promise<void>;
   createChildSession?: (input: ChildSessionInput) => Promise<{ sessionId: string }>;
   abortSession?: (sessionId: string) => Promise<void>;
+  restartCoordinatorSession?: (input: { meeting: GroupMeeting; sessionId: string }) => Promise<void>;
+  isCoordinatorSessionAlive?: (sessionId: string) => Promise<boolean>;
 }
 
 export class LabWorkflowError extends Error {
@@ -637,9 +659,18 @@ export function parseLabOrchestrateAction(value: unknown): LabOrchestrateAction 
     case "submit_undergrad_records":
       allowedKeys(raw, ["action", "requestId", "taskId", "result"], "action");
       return { action, requestId, taskId: idValue(raw.taskId, "action.taskId"), result: parseUndergradResult(raw.result, true) };
-    case "review_undergrad_records":
-      allowedKeys(raw, ["action", "requestId", "taskId", "decision"], "action");
-      return { action, requestId, taskId: idValue(raw.taskId, "action.taskId"), decision: enumValue(raw.decision, ["accepted", "revision_requested"], "action.decision") };
+    case "review_undergrad_records": {
+      allowedKeys(raw, ["action", "requestId", "taskId", "decision", "comments", "gapThreadIds", "missingCriteria"], "action");
+      return {
+        action,
+        requestId,
+        taskId: idValue(raw.taskId, "action.taskId"),
+        decision: enumValue(raw.decision, ["accepted", "revision_requested"], "action.decision"),
+        ...(raw.comments === undefined ? {} : { comments: textValue(raw.comments, "action.comments") }),
+        ...(raw.gapThreadIds === undefined ? {} : { gapThreadIds: stringArray(raw.gapThreadIds, "action.gapThreadIds") }),
+        ...(raw.missingCriteria === undefined ? {} : { missingCriteria: stringArray(raw.missingCriteria, "action.missingCriteria") }),
+      };
+    }
     case "submit_pre_master_judgment":
       allowedKeys(raw, ["action", "requestId", "workPackageId", "judgment", "evidenceRefs"], "action");
       return { action, requestId, workPackageId: idValue(raw.workPackageId, "action.workPackageId"), judgment: textValue(raw.judgment, "action.judgment"), evidenceRefs: stringArray(raw.evidenceRefs, "action.evidenceRefs", { min: 1 }) };
@@ -1120,6 +1151,168 @@ async function defaultDeliverMasterTask({ meeting, reservation, workPackage }: M
   });
 }
 
+
+function noticeKindForEvent(event: LabWorkflowNoticeEvent): LabNoticeKind {
+  return event === "undergrad_revision_requested" || event === "coordinator_stalled" ? "required" : "informational";
+}
+
+function satisfyRevisionRequiredAction(task: UndergradTask): void {
+  if (task.requiredAction?.kind === "spawn_revision_threads" && task.requiredAction.status === "open") {
+    task.requiredAction.status = "satisfied";
+  }
+}
+
+function revisionRequiredPayload(task: UndergradTask): Record<string, unknown> {
+  const required = task.requiredAction;
+  return {
+    taskId: task.taskId,
+    requesterRole: task.requesterRole,
+    requiredAction: "spawn_undergrad_threads",
+    currentAttempt: task.attempt,
+    nextAttempt: task.attempt + 1,
+    title: task.title,
+    objective: task.objective,
+    instructions: task.instructions,
+    acceptanceCriteria: task.acceptanceCriteria,
+    threadIds: task.threadIds,
+    ...(required?.comments ? { comments: required.comments } : {}),
+    ...(required?.gapThreadIds ? { gapThreadIds: required.gapThreadIds } : {}),
+    ...(required?.missingCriteria ? { missingCriteria: required.missingCriteria } : {}),
+  };
+}
+
+async function defaultIsCoordinatorSessionAlive(sessionId: string): Promise<boolean> {
+  return Boolean(getRpcSession(sessionId)?.isAlive());
+}
+
+async function defaultRestartCoordinatorSession(input: { meeting: GroupMeeting; sessionId: string }): Promise<void> {
+  const undergraduate = input.meeting.members.find((member) => member.sessionId === input.sessionId && member.role === "undergraduate");
+  if (!undergraduate?.provider || !undergraduate.modelId || !undergraduate.thinkingLevel) {
+    throw new LabWorkflowError("Undergraduate coordinator session is unavailable", "undergraduate_unavailable");
+  }
+  const existing = getRpcSession(input.sessionId);
+  if (existing?.isAlive()) {
+    await existing.send({ type: "abort" }).catch(() => {});
+  }
+  const sessionFile = await resolveSessionPath(input.sessionId);
+  if (!sessionFile) throw new LabWorkflowError("Undergraduate coordinator session is unavailable", "undergraduate_unavailable");
+  await startRpcSession(input.sessionId, sessionFile, input.meeting.cwd, {
+    initialModel: { provider: undergraduate.provider, modelId: undergraduate.modelId },
+    thinkingLevel: undergraduate.thinkingLevel,
+    persistStartupPreferences: false,
+    fixedToolNames: getGroupMeetingToolNames("undergraduate"),
+    fixedSystemPrompt: getGroupMeetingRoleSystemPrompt("undergraduate"),
+  });
+}
+
+async function enqueueNotice(
+  workflow: LabWorkflow,
+  meeting: GroupMeeting,
+  options: LabWorkflowOptions,
+  persist: () => Promise<void>,
+  toRole: GroupMeetingRole,
+  toSessionId: string | null,
+  event: LabWorkflowNoticeEvent,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const notice: LabWorkflowNotice = {
+    noticeId: randomUUID(),
+    event,
+    kind: noticeKindForEvent(event),
+    toRole,
+    toSessionId: toSessionId ?? "",
+    payload,
+    status: "pending",
+    createdAt: nowValue(options),
+    updatedAt: nowValue(options),
+  };
+  workflow.notices.push(notice);
+  await persist();
+  if (!toSessionId) {
+    notice.status = "failed";
+    notice.error = `Notice recipient ${toRole} has no meeting session`;
+    notice.updatedAt = nowValue(options);
+    await persist();
+    return;
+  }
+  try {
+    await (options.deliverNotice ?? defaultDeliverNotice)({ meeting, notice });
+    notice.status = "delivered";
+  } catch (error) {
+    notice.status = "failed";
+    notice.error = error instanceof Error ? error.message : String(error);
+  }
+  notice.updatedAt = nowValue(options);
+  await persist();
+}
+
+async function sweepOpenRevisionActions(
+  workflow: LabWorkflow,
+  meeting: GroupMeeting,
+  options: LabWorkflowOptions,
+  persist: () => Promise<void>,
+): Promise<boolean> {
+  const now = nowValue(options);
+  const nowMs = Date.parse(now);
+  let changed = false;
+  const undergraduate = meeting.members.find((member) => member.role === "undergraduate");
+  for (const task of workflow.undergradTasks) {
+    const required = task.requiredAction;
+    if (task.status !== "revision_requested" || required?.kind !== "spawn_revision_threads" || required.status !== "open") continue;
+    const anchor = required.lastNudgedAt ?? required.lastDeliveredAt ?? required.requestedAt;
+    const elapsed = nowMs - Date.parse(anchor);
+    if (!Number.isFinite(elapsed) || elapsed < REVISION_NUDGE_AFTER_MS) continue;
+    required.nudgeCount += 1;
+    required.lastNudgedAt = now;
+    required.lastDeliveredAt = now;
+    task.updatedAt = now;
+    workflow.updatedAt = now;
+    changed = true;
+    await persist();
+    const sessionId = undergraduate?.sessionId ?? null;
+    const sinceRequested = nowMs - Date.parse(required.requestedAt);
+    const escalate = Number.isFinite(sinceRequested) && sinceRequested >= REVISION_ESCALATE_AFTER_MS;
+    const alive = sessionId ? await (options.isCoordinatorSessionAlive ?? defaultIsCoordinatorSessionAlive)(sessionId) : false;
+    if ((!alive || escalate) && sessionId) {
+      try {
+        await (options.restartCoordinatorSession ?? defaultRestartCoordinatorSession)({ meeting, sessionId });
+      } catch {
+        // Delivery below still records the stall even if restart fails.
+      }
+    }
+    await enqueueNotice(
+      workflow,
+      meeting,
+      options,
+      persist,
+      "undergraduate",
+      sessionId,
+      "undergrad_revision_requested",
+      revisionRequiredPayload(task),
+    );
+    if (escalate && !required.stalledNotifiedAt) {
+      required.stalledNotifiedAt = now;
+      const pi = meeting.members.find((member) => member.role === "pi");
+      await enqueueNotice(
+        workflow,
+        meeting,
+        options,
+        persist,
+        "pi",
+        pi?.sessionId ?? null,
+        "coordinator_stalled",
+        {
+          taskId: task.taskId,
+          requiredAction: "spawn_undergrad_threads",
+          nudgeCount: required.nudgeCount,
+          coordinatorSessionId: sessionId,
+        },
+      );
+    }
+  }
+  return changed;
+}
+
 async function defaultDeliverNotice({ meeting, notice }: LabNoticeDeliveryInput): Promise<void> {
   const recipient = meeting.members.find((member) => member.sessionId === notice.toSessionId);
   if (!recipient?.provider || !recipient.modelId || !recipient.thinkingLevel) {
@@ -1148,11 +1341,17 @@ async function defaultDeliverNotice({ meeting, notice }: LabNoticeDeliveryInput)
     : "prompt";
   await session.send({
     type,
-    message: [
-      "A persisted Virtual Biomed Lab workflow event requires your attention.",
-      "This notice is informational and cannot change workflow state. Read canonical state and use lab_orchestrate for any transition.",
-      JSON.stringify({ meetingId: meeting.meetingId, noticeId: notice.noticeId, event: notice.event, ...notice.payload }),
-    ].join("\n"),
+    message: noticeKindForEvent(notice.event) === "required" || notice.kind === "required"
+      ? [
+        "A persisted Virtual Biomed Lab workflow event requires your attention.",
+        "REQUIRED ACTION this turn: this notice is not informational. Call lab_orchestrate to complete the required action before the turn ends. A reply that no transition is required does not close it.",
+        JSON.stringify({ meetingId: meeting.meetingId, noticeId: notice.noticeId, event: notice.event, kind: "required", ...notice.payload }),
+      ].join("\n")
+      : [
+        "A persisted Virtual Biomed Lab workflow event requires your attention.",
+        "This notice is informational and cannot change workflow state. Read canonical state and use lab_orchestrate for any transition.",
+        JSON.stringify({ meetingId: meeting.meetingId, noticeId: notice.noticeId, event: notice.event, kind: "informational", ...notice.payload }),
+      ].join("\n"),
   });
 }
 
@@ -1165,36 +1364,9 @@ async function applyAction(
   persist: () => Promise<void>,
 ): Promise<void> {
   const now = nowValue(options);
-  const notify = async (toRole: GroupMeetingRole, toSessionId: string | null, event: LabWorkflowNoticeEvent, payload: Record<string, unknown>): Promise<void> => {
-    const notice: LabWorkflowNotice = {
-      noticeId: randomUUID(),
-      event,
-      toRole,
-      toSessionId: toSessionId ?? "",
-      payload,
-      status: "pending",
-      createdAt: nowValue(options),
-      updatedAt: nowValue(options),
-    };
-    workflow.notices.push(notice);
-    await persist();
-    if (!toSessionId) {
-      notice.status = "failed";
-      notice.error = `Notice recipient ${toRole} has no meeting session`;
-      notice.updatedAt = nowValue(options);
-      await persist();
-      return;
-    }
-    try {
-      await (options.deliverNotice ?? defaultDeliverNotice)({ meeting, notice });
-      notice.status = "delivered";
-    } catch (error) {
-      notice.status = "failed";
-      notice.error = error instanceof Error ? error.message : String(error);
-    }
-    notice.updatedAt = nowValue(options);
-    await persist();
-  };
+  const notify = (toRole: GroupMeetingRole, toSessionId: string | null, event: LabWorkflowNoticeEvent, payload: Record<string, unknown>): Promise<void> => (
+    enqueueNotice(workflow, meeting, options, persist, toRole, toSessionId, event, payload)
+  );
   const notifyRole = (toRole: GroupMeetingRole, event: LabWorkflowNoticeEvent, payload: Record<string, unknown>): Promise<void> => (
     notify(toRole, meeting.members.find((member) => member.role === toRole)?.sessionId ?? null, event, payload)
   );
@@ -1317,7 +1489,10 @@ async function applyAction(
       if (currentTaskActive + action.threads.length > task.maxThreads || currentTaskActive + action.threads.length > 3 || globalActive + action.threads.length > 6) {
         throw new LabWorkflowError("Undergraduate thread capacity exceeded", "undergrad_capacity_exceeded");
       }
-      if (task.status === "revision_requested" || task.status === "interrupted") task.attempt += 1;
+      if (task.status === "revision_requested" || task.status === "interrupted") {
+        task.attempt += 1;
+        satisfyRevisionRequiredAction(task);
+      }
       const created = action.threads.map((spec): UndergradThread => ({
         threadId: randomUUID(),
         parentTaskId: task.taskId,
@@ -1362,6 +1537,9 @@ async function applyAction(
     case "submit_undergrad_records": {
       requireMember(actor, ["undergraduate"]);
       const task = findTask(workflow, action.taskId);
+      if (task.requiredAction?.kind === "spawn_revision_threads" && task.requiredAction.status === "open") {
+        throw new LabWorkflowError("Revision spawn is required before resubmission", "stage_violation");
+      }
       if (!new Set<UndergradTaskStatus>(["running", "revision_requested"]).has(task.status)) throw new LabWorkflowError("Undergraduate task is not accepting records", "stage_violation");
       requireMeetingRefs(workflow.meetingId, action.result.artifactRefs);
       const threadIds = action.result.threadIds ?? [];
@@ -1385,8 +1563,21 @@ async function applyAction(
         if (action.decision === "accepted" && workPackage.undergradTaskIds.every((taskId) => findTask(workflow, taskId).status === "accepted")) workPackage.status = "retrieval_accepted";
         workPackage.updatedAt = now;
       }
+      if (action.decision === "accepted") {
+        satisfyRevisionRequiredAction(task);
+      }
       if (action.decision === "revision_requested") {
-        await notifyRole("undergraduate", "undergrad_revision_requested", { taskId: task.taskId, requesterRole: task.requesterRole });
+        task.requiredAction = {
+          kind: "spawn_revision_threads",
+          status: "open",
+          requestedAt: now,
+          lastDeliveredAt: now,
+          nudgeCount: 0,
+          ...(action.comments ? { comments: action.comments } : {}),
+          ...(action.gapThreadIds ? { gapThreadIds: action.gapThreadIds } : {}),
+          ...(action.missingCriteria ? { missingCriteria: action.missingCriteria } : {}),
+        };
+        await notifyRole("undergraduate", "undergrad_revision_requested", revisionRequiredPayload(task));
       }
       break;
     }
@@ -1722,6 +1913,8 @@ export async function readLabWorkflow(input: ReadLabWorkflowInput, options: LabW
   return withMeetingLock(input.cwd, input.meetingId, agentDir, async () => {
     const { meeting, workflow } = await prepareLockedWorkflow(input.cwd, input.meetingId, options);
     const actor = resolveActor(meeting, workflow, input.actorSessionId);
+    const persist = () => writeWorkflow(workflow, agentDir);
+    if (await sweepOpenRevisionActions(workflow, meeting, options, persist)) await persist();
     return visibleWorkflow(workflow, actor);
   });
 }
@@ -1744,7 +1937,9 @@ export async function orchestrateLabWorkflow(input: OrchestrateLabWorkflowInput,
     workflow.idempotency[action.requestId] = { fingerprint, status: "pending", updatedAt: nowValue(options) };
     await writeWorkflow(workflow, agentDir);
     try {
-      await applyAction(workflow, meeting, actor, action, options, () => writeWorkflow(workflow, agentDir));
+      const persist = () => writeWorkflow(workflow, agentDir);
+      await applyAction(workflow, meeting, actor, action, options, persist);
+      await sweepOpenRevisionActions(workflow, meeting, options, persist);
       workflow.idempotency[action.requestId] = { fingerprint, status: "complete", updatedAt: nowValue(options) };
       await writeWorkflow(workflow, agentDir);
       return visibleWorkflow(workflow, actor);

@@ -18,7 +18,7 @@ const {
 
 const roles = ["pi", "phd-1", "phd-2", "master-1", "master-2", "undergraduate"];
 
-async function setup({ deliverTask, deliverMasterTask, deliverNotice, createChildSession, abortSession } = {}) {
+async function setup({ deliverTask, deliverMasterTask, deliverNotice, createChildSession, abortSession, restartCoordinatorSession, isCoordinatorSessionAlive, now } = {}) {
   const root = await mkdtemp(join(tmpdir(), "medpi-lab-workflow-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");
@@ -43,6 +43,7 @@ async function setup({ deliverTask, deliverMasterTask, deliverNotice, createChil
   const options = {
     agentDir,
     runtimeId: "runtime-a",
+    ...(now ? { now } : {}),
     readMeeting: async (requestedCwd, meetingId) => (
       resolve(requestedCwd) === meeting.cwd && meetingId === meeting.meetingId ? meeting : null
     ),
@@ -51,6 +52,8 @@ async function setup({ deliverTask, deliverMasterTask, deliverNotice, createChil
     deliverNotice: deliverNotice ?? (async () => {}),
     createChildSession: createChildSession ?? (async () => ({ sessionId: `child-${++childSequence}` })),
     abortSession: abortSession ?? (async () => {}),
+    ...(restartCoordinatorSession ? { restartCoordinatorSession } : {}),
+    ...(isCoordinatorSessionAlive ? { isCoordinatorSessionAlive } : {}),
   };
   const call = (role, action, overrideOptions = {}) => orchestrateLabWorkflow({
     cwd: meeting.cwd,
@@ -679,4 +682,138 @@ test("workflow route applies origin, JSON, cwd, session, and unified action chec
   assert.match(source, /sessionId is required/);
   assert.match(source, /orchestrateLabWorkflow\(\{/);
   assert.match(source, /bindLabWorkflowRuntime\(\)/);
+});
+
+async function submittedParent(context, doctorRole, workPackageId, prefix) {
+  let workflow = await context.call(doctorRole, delegateAction(workPackageId, prefix));
+  const task = workflow.undergradTasks.at(-1);
+  workflow = await context.call("undergraduate", {
+    action: "spawn_undergrad_threads",
+    requestId: `${prefix}-spawn`,
+    taskId: task.taskId,
+    threads: [threadSpec(prefix)],
+  });
+  const thread = workflow.undergradThreads.find((candidate) => candidate.parentTaskId === task.taskId);
+  await context.call(thread.sessionId, {
+    action: "submit_undergrad_thread",
+    requestId: `${prefix}-thread-submit`,
+    taskId: task.taskId,
+    threadId: thread.threadId,
+    result: literatureResult(`${prefix} paper`),
+  });
+  await context.call("undergraduate", {
+    action: "submit_undergrad_records",
+    requestId: `${prefix}-parent-submit`,
+    taskId: task.taskId,
+    result: { ...literatureResult(`${prefix} paper`), threadIds: [thread.threadId] },
+  });
+  return { task, thread };
+}
+
+test("keeps undergraduate revision as an open required action until spawn, not coordinator chat", async () => {
+  const delivered = [];
+  const context = await setup({
+    deliverNotice: async ({ notice }) => delivered.push(notice),
+  });
+  let workflow = await clarifyAndDispatch(context);
+  const phd1 = workflow.workPackages.find((entry) => entry.doctorRole === "phd-1");
+  const { task, thread } = await submittedParent(context, "phd-1", phd1.workPackageId, "rev-gate");
+  const parsed = parseLabOrchestrateAction({
+    action: "review_undergrad_records",
+    requestId: "rev-parse",
+    taskId: task.taskId,
+    decision: "revision_requested",
+    comments: "Burns thread needs >=4 unique PMIDs with geography tags.",
+    gapThreadIds: [thread.threadId],
+    missingCriteria: ["At least 4 unique PMID/DOI records", "China_direct vs overseas_extrapolation on every record"],
+  });
+  assert.equal(parsed.comments, "Burns thread needs >=4 unique PMIDs with geography tags.");
+  assert.deepEqual(parsed.gapThreadIds, [thread.threadId]);
+
+  workflow = await context.call("phd-1", {
+    action: "review_undergrad_records",
+    requestId: "rev-gate-revise",
+    taskId: task.taskId,
+    decision: "revision_requested",
+    comments: "Burns thread needs >=4 unique PMIDs with geography tags.",
+    gapThreadIds: [thread.threadId],
+    missingCriteria: ["At least 4 unique PMID/DOI records"],
+  });
+  const revised = workflow.undergradTasks.find((entry) => entry.taskId === task.taskId);
+  assert.equal(revised.status, "revision_requested");
+  assert.equal(revised.attempt, 1);
+  assert.equal(revised.requiredAction?.kind, "spawn_revision_threads");
+  assert.equal(revised.requiredAction?.status, "open");
+  assert.equal(revised.requiredAction?.comments, "Burns thread needs >=4 unique PMIDs with geography tags.");
+  assert.deepEqual(revised.requiredAction?.gapThreadIds, [thread.threadId]);
+
+  const revisionNotice = delivered.find((notice) => notice.event === "undergrad_revision_requested");
+  assert.equal(revisionNotice.kind, "required");
+  assert.equal(revisionNotice.payload.requiredAction, "spawn_undergrad_threads");
+  assert.equal(revisionNotice.payload.comments, "Burns thread needs >=4 unique PMIDs with geography tags.");
+  assert.deepEqual(revisionNotice.payload.gapThreadIds, [thread.threadId]);
+  assert.equal(revisionNotice.payload.nextAttempt, 2);
+
+  const threadNotice = delivered.find((notice) => notice.event === "undergrad_thread_submitted");
+  assert.equal(threadNotice.kind, "informational");
+
+  const afterChat = await context.call("undergraduate", { action: "get_state" });
+  assert.equal(afterChat.undergradTasks.find((entry) => entry.taskId === task.taskId).requiredAction.status, "open");
+
+  workflow = await context.call("undergraduate", {
+    action: "spawn_undergrad_threads",
+    requestId: "rev-gate-attempt2-spawn",
+    taskId: task.taskId,
+    threads: [threadSpec("rev-gate-2")],
+  });
+  const spawned = workflow.undergradTasks.find((entry) => entry.taskId === task.taskId);
+  assert.equal(spawned.status, "running");
+  assert.equal(spawned.attempt, 2);
+  assert.equal(spawned.requiredAction.status, "satisfied");
+  assert.ok(workflow.undergradThreads.some((entry) => entry.parentTaskId === task.taskId && entry.attempt === 2));
+});
+
+test("nudges an open revision spawn after 12 minutes and restarts a stalled coordinator for the PI", async () => {
+  let now = "2026-08-20T14:00:00.000Z";
+  const delivered = [];
+  const restarts = [];
+  const context = await setup({
+    now: () => now,
+    deliverNotice: async ({ notice }) => delivered.push({ event: notice.event, kind: notice.kind, toRole: notice.toRole, createdAt: notice.createdAt }),
+    isCoordinatorSessionAlive: async () => restarts.length === 0,
+    restartCoordinatorSession: async ({ sessionId }) => { restarts.push(sessionId); },
+  });
+  let workflow = await clarifyAndDispatch(context);
+  const phd1 = workflow.workPackages.find((entry) => entry.doctorRole === "phd-1");
+  const { task } = await submittedParent(context, "phd-1", phd1.workPackageId, "rev-nudge");
+  await context.call("phd-1", {
+    action: "review_undergrad_records",
+    requestId: "rev-nudge-revise",
+    taskId: task.taskId,
+    decision: "revision_requested",
+    comments: "Replace the placeholder record.",
+  });
+  assert.equal(delivered.filter((notice) => notice.event === "undergrad_revision_requested").length, 1);
+
+  now = "2026-08-20T14:05:00.000Z";
+  await context.call("pi", { action: "get_state" });
+  assert.equal(delivered.filter((notice) => notice.event === "undergrad_revision_requested").length, 1);
+  assert.deepEqual(restarts, []);
+
+  now = "2026-08-20T14:12:00.000Z";
+  workflow = await context.call("pi", { action: "get_state" });
+  const afterNudge = workflow.undergradTasks.find((entry) => entry.taskId === task.taskId).requiredAction;
+  assert.equal(afterNudge.status, "open");
+  assert.equal(afterNudge.nudgeCount, 1);
+  assert.equal(delivered.filter((notice) => notice.event === "undergrad_revision_requested").length, 2);
+  assert.deepEqual(restarts, []);
+  assert.equal(delivered.some((notice) => notice.event === "coordinator_stalled"), false);
+
+  now = "2026-08-20T14:24:00.000Z";
+  workflow = await context.call("pi", { action: "get_state" });
+  const stalled = workflow.undergradTasks.find((entry) => entry.taskId === task.taskId).requiredAction;
+  assert.equal(stalled.status, "open");
+  assert.ok(stalled.nudgeCount >= 2);
+  assert.deepEqual(restarts, ["session-undergraduate"]);
+  assert.ok(delivered.some((notice) => notice.event === "coordinator_stalled" && notice.toRole === "pi" && notice.kind === "required"));
 });
