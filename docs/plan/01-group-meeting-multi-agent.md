@@ -132,3 +132,32 @@ M1 已按本计划落地为未提交补丁：
 - PI→成员派发、自动 prompt、成员间通信和 reviewer 仍未实现。
 
 当前真实环境的创建失败路径已通过浏览器验证，会在创建任何 session 前报告具体角色。当前首先报告 `gpt-5.6-sol` 同时来自 `new-provider` 与 `new-provider-1`；此外仍缺少 `deepseek-v4-pro`，现有 `gpt-5.6-terra` 也不支持要求的 `xhigh`。因此代码闭环已经具备，但必须先校准 ModelsConfig 才能产生 `ready` 的六窗会议。
+
+## 9. Base URL 切换与上游兼容硬化（组会补丁内置）
+
+组会成员是普通 Pi `AgentSession`，但模型语义（`role`、请求体大小）受上游/代理限制，且**与 Base URL 强相关**。换地址会复发两类问题，组会补丁内置了两道防线：
+
+### 9.1 `developer` role 400（自动修复，Base URL 无关）
+
+Pi 的 openai-completions encoder 在 `model.reasoning && compat.supportsDeveloperRole` 时把系统提示词发成 `role:"developer"`。`supportsDeveloperRole` 按 Base URL 自动检测：未知/自定义域名默认 **true**，而 DeepSeek / Console Go 等上游只接受 `system`/`user`/`assistant`/`tool`，导致 400。
+
+补丁处置（`apps/web/lib/meeting-model-role.ts` + `group-meeting-server.ts`）：
+
+- 会议创建/设置成员时，对会发射 `developer` 的 roster 模型，**自动**在 `~/.pi/agent/models.json` 该模型 `compat` 写入 `"supportsDeveloperRole": false`（幂等；只添加、绝不覆盖用户显式值；含 JS 注释或无法解析的文件不重写，改为可修复诊断），并刷新会议 `ModelRuntime` 后重新解析 roster。
+- 规则恒定：组会成员一律发 `system`。`system` 被所有 OpenAI 兼容上游接受，因此换任意 Base URL 都不再触发该 400。
+- 创建响应的 `modelRoleAutomations` 字段 + 服务端日志会报告本次自动写入，避免静默改动。
+
+### 9.2 大请求体 413（基础设施要求）
+
+当上下文增长到超出某个代理/网关的请求体上限时，成员 turn 或自动压缩的摘要请求会被 `413 Request Entity Too Large` 拦下，导致该成员永远无法压缩（死循环）。这不是代码能替你改的，是**部署要求**：
+
+- 组会成员模型基址沿途的**每个**代理/网关都必须允许大请求体。建议统一对齐本地网关的 `MAX_BODY_BYTES=67108864`：
+  - nginx 反代（如 `newapi.medhorizon.icu`）：在站点/server 作用域加 `client_max_body_size 64m;` 后 `nginx -t && systemctl reload nginx`（默认 1m 会复现）。
+  - 网关进程：`MAX_BODY_BYTES`（cursor-sdk2api 用）。
+- 任一环节低于实际上下文大小时，会在对应角色格看到 `413`/`body too large`，成员不会自动压缩。
+
+### 9.3 换 Base URL 检查清单
+
+1. 新地址沿途代理/网关注入 `client_max_body_size ≥ 64m`（或 `MAX_BODY_BYTES`），改后 reload 并验证：发一个 >1MB 的请求体，应得到上游业务响应（如 401）而非 413。
+2. 新模型若为 reasoning 且上游不认 `developer`，无需手改：创建/设置组会时补丁会自动写入 `supportsDeveloperRole: false`（见 9.1）。
+3. 创建组会前 `npm test` 与 `tsc --noEmit` 通过；`next build` 开发期间不运行。

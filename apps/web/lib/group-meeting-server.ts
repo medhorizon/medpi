@@ -19,6 +19,13 @@ import {
   type GroupMeetingThinkingLevel,
 } from "./group-meeting";
 import { resolveVisibleModels } from "./model-scope";
+import {
+  applyModelSystemRoleToConfig,
+  modelWouldEmitDeveloperRole,
+  type MeetingModelRoleAutomation,
+  type MeetingModelRoleAutomationAction,
+  type ModelsJsonConfig,
+} from "./meeting-model-role";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { bindLabWorkflowRuntime, resolveLabWorkflowChildSessionPolicy } from "./lab-workflow";
 import { getRpcSession, startRpcSession } from "./rpc-manager";
@@ -233,26 +240,112 @@ async function preflightGroupMeeting(requestedCwd: string): Promise<{
   cwd: string;
   projectRoot: string;
   roster: ResolvedMeetingMember[];
+  automations: MeetingModelRoleAutomation[];
 }> {
   const cwd = await authorizeMeetingCwd(requestedCwd);
   const agentDir = getAgentDir();
-  const visibleModels = await loadVisibleMeetingModels(cwd, agentDir);
+  const { visible, automations } = await resolveMeetingVisibleModels(cwd, agentDir);
   const { projectRoot } = await resolveProject(cwd);
-  return { cwd, projectRoot, roster: resolveGroupMeetingRoster(visibleModels) };
+  return { cwd, projectRoot, roster: resolveGroupMeetingRoster(visible), automations };
 }
 
-async function loadVisibleMeetingModels(cwd: string, agentDir: string): Promise<readonly Model<Api>[]> {
+/**
+ * Append `supportsDeveloperRole: false` to a model's `compat` in models.json so
+ * the meeting always sends `role:"system"` for it, independent of the upstream
+ * Base URL. Only ever adds the safe flag; leaves files that use JS comments or
+ * fail to parse untouched (returns `unreadable`) rather than rewriting them.
+ */
+async function ensureMeetingModelUsesSystemRole(
+  agentDir: string,
+  provider: string,
+  modelId: string,
+): Promise<MeetingModelRoleAutomationAction> {
+  const modelsPath = join(agentDir, "models.json");
+  let raw: string;
+  try {
+    raw = await readFile(modelsPath, "utf8");
+  } catch {
+    return "unreadable";
+  }
+  let config: ModelsJsonConfig;
+  try {
+    config = JSON.parse(raw) as ModelsJsonConfig;
+  } catch {
+    return "unreadable";
+  }
+  const result = applyModelSystemRoleToConfig(config, provider, modelId);
+  if (result.action === "not_found") return "unreadable";
+  if (result.action === "already_safe") return "already_safe";
+  // Cite nothing: atomic temp+rename, private mode — same pattern as meeting metadata.
+  const temporary = join(agentDir, `.models.${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporary, `${JSON.stringify(result.config, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    await rename(temporary, modelsPath);
+    return "added_system_role";
+  } catch {
+    await unlink(temporary).catch(() => {});
+    return "failed";
+  }
+}
+
+/**
+ * Resolve meeting-visible models, auto-pinning `system` role on any roster
+ * model that would otherwise emit `role:"developer"` (Base-URL independent).
+ * Newly added flags are reported so the caller can surface them instead of
+ * being silent about a models.json edit.
+ */
+async function resolveMeetingVisibleModels(
+  cwd: string,
+  agentDir: string,
+): Promise<{ visible: readonly Model<Api>[]; automations: MeetingModelRoleAutomation[] }> {
   const trustReloadOptions = projectTrustReloadOptions(cwd, agentDir);
   const services = await createMedPiAgentSessionServices({
     cwd,
     agentDir,
     ...(trustReloadOptions ? { resourceLoaderReloadOptions: trustReloadOptions } : {}),
   });
-  const scope = await resolveVisibleModels(
+  let scope = await resolveVisibleModels(
     services.modelRuntime,
     services.settingsManager.getEnabledModels(),
   );
-  return scope.visible;
+
+  const automations: MeetingModelRoleAutomation[] = [];
+  let changed = false;
+  for (const member of GROUP_MEETING_ROSTER) {
+    const matches = scope.visible.filter((model) => model.id === member.modelId);
+    // Ambiguity / missing model is handled by resolveGroupMeetingRoster below.
+    if (matches.length !== 1) continue;
+    const model = matches[0];
+    if (!modelWouldEmitDeveloperRole(model)) continue;
+    const action = await ensureMeetingModelUsesSystemRole(agentDir, model.provider, model.id);
+    automations.push({
+      role: member.role,
+      label: member.label,
+      provider: model.provider,
+      modelId: model.id,
+      action,
+    });
+    if (action === "added_system_role") changed = true;
+  }
+
+  if (changed) {
+    // Reload so the session models actually carry the pinned flag.
+    await services.modelRuntime.refresh({ allowNetwork: false });
+    scope = await resolveVisibleModels(
+      services.modelRuntime,
+      services.settingsManager.getEnabledModels(),
+    );
+  }
+  return { visible: scope.visible, automations };
+}
+
+async function loadVisibleMeetingModels(cwd: string, agentDir: string): Promise<readonly Model<Api>[]> {
+  const { visible } = await resolveMeetingVisibleModels(cwd, agentDir);
+  return visible;
 }
 
 function meetingDirectory(cwd: string, agentDir: string): string {
@@ -612,7 +705,15 @@ export async function createGroupMeetingFromRoster(
   return meeting;
 }
 
-export async function createGroupMeeting(requestedCwd: string): Promise<GroupMeeting> {
-  const { cwd, projectRoot, roster } = await preflightGroupMeeting(requestedCwd);
-  return createGroupMeetingFromRoster(cwd, roster, { projectRoot });
+export async function createGroupMeeting(
+  requestedCwd: string,
+): Promise<GroupMeeting & { modelRoleAutomations: MeetingModelRoleAutomation[] }> {
+  const { cwd, projectRoot, roster, automations } = await preflightGroupMeeting(requestedCwd);
+  const meeting = await createGroupMeetingFromRoster(cwd, roster, { projectRoot });
+  if (automations.length > 0) {
+    console.info(`[group-meeting] model-role automations: ${JSON.stringify(automations)}`);
+  }
+  // Extra field rides on the creation response only; the persisted metadata is
+  // already written by createGroupMeetingFromRoster and stays unchanged.
+  return { ...meeting, modelRoleAutomations: automations };
 }
