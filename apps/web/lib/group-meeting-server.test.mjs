@@ -427,3 +427,86 @@ test("an empty session is durably recoverable after the in-memory registry is cl
   assert.equal(recovered.getSessionId(), manager.getSessionId());
   assert.equal(recovered.getCwd(), cwd);
 });
+
+function fakeResidentSessions(sessionIds) {
+  const shadow = new Map();
+  const wrappers = sessionIds.map((sessionId) => {
+    const wrapper = {
+      alive: true,
+      running: false,
+      shutdownCalls: 0,
+      isAlive: () => wrapper.alive,
+      isRunning: () => wrapper.running,
+      shutdown: async () => {
+        wrapper.shutdownCalls += 1;
+        wrapper.alive = false;
+      },
+    };
+    shadow.set(sessionId, wrapper);
+    return wrapper;
+  });
+  const previous = globalThis.__piSessions;
+  globalThis.__piSessions = shadow;
+  return { wrappers, restore: () => { globalThis.__piSessions = previous; } };
+}
+
+test("deleting a meeting shuts down its resident member sessions (memory reclaim)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "medpi-reclaim-delete-"));
+  const cwd = join(root, "project");
+  const agentDir = join(root, "agent");
+  await mkdir(cwd);
+  allowFileRoot(cwd);
+  let sequence = 0;
+  const meeting = await createGroupMeetingFromRoster(
+    cwd,
+    resolveGroupMeetingRoster(availableModels()),
+    { agentDir, createSession: async (_cwd, command) => ({
+      sessionId: `resident-${++sequence}`,
+      data: null,
+      model: { provider: command.provider, modelId: command.modelId },
+      thinkingLevel: command.thinkingLevel,
+    }) },
+  );
+  const memberIds = meeting.members.map((member) => member.sessionId);
+  assert.equal(memberIds.length, 6);
+
+  const { wrappers, restore } = fakeResidentSessions(memberIds);
+  try {
+    await deleteGroupMeeting(cwd, meeting.meetingId, agentDir);
+  } finally {
+    restore();
+  }
+  assert.ok(wrappers.every((wrapper) => wrapper.shutdownCalls === 1 && wrapper.alive === false));
+  assert.equal(await readGroupMeeting(cwd, meeting.meetingId, agentDir), null);
+  assert.ifError(await readdir(join(agentDir, "meetings", "project-key")).then(() => null, () => null));
+});
+
+test("creating a new meeting evicts idle resident sessions of earlier meetings only", async () => {
+  const root = await mkdtemp(join(tmpdir(), "medpi-reclaim-create-"));
+  const cwd = join(root, "project");
+  const agentDir = join(root, "agent");
+  await mkdir(cwd);
+  allowFileRoot(cwd);
+  let sequence = 0;
+  const createSession = async (_cwd, command) => ({
+    sessionId: `resident-${++sequence}`,
+    data: null,
+    model: { provider: command.provider, modelId: command.modelId },
+    thinkingLevel: command.thinkingLevel,
+  });
+  const roster = resolveGroupMeetingRoster(availableModels());
+
+  const first = await createGroupMeetingFromRoster(cwd, roster, { agentDir, createSession });
+  const firstIds = first.members.map((member) => member.sessionId);
+  const { wrappers, restore } = fakeResidentSessions(firstIds);
+  try {
+    wrappers[3].running = true; // a busy member of the old meeting is left alone
+    const second = await createGroupMeetingFromRoster(cwd, roster, { agentDir, createSession });
+    assert.equal(second.members.length, 6);
+    // Idle old members are evicted; the busy one is not aborted mid-round.
+    assert.equal(wrappers.filter((wrapper) => wrapper.alive === false).length, 5);
+    assert.equal(wrappers[3].shutdownCalls, 0);
+  } finally {
+    restore();
+  }
+});

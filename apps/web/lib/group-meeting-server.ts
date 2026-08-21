@@ -414,6 +414,33 @@ export async function readGroupMeeting(
   }
 }
 
+/**
+ * Reclaim the resident RPC sessions belonging to a meeting so their heap is
+ * freed. Every delivery/settings path lazily re-hydrates a destroyed member
+ * session from its persisted `.jsonl`, so eviction is safe. `interruptRunning`
+ * is only true on explicit teardown (deleting the meeting).
+ */
+async function shutdownMeetingMemberSessions(
+  meeting: GroupMeeting,
+  interruptRunning = false,
+): Promise<number> {
+  let shut = 0;
+  for (const member of meeting.members) {
+    if (!member.sessionId) continue;
+    const session = getRpcSession(member.sessionId);
+    if (!session?.isAlive()) continue;
+    if (!interruptRunning && session.isRunning()) continue;
+    await session.shutdown().catch((error: unknown) => {
+      console.error(
+        "[group-meeting] failed to shut down member session:",
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+    shut += 1;
+  }
+  return shut;
+}
+
 export async function deleteGroupMeeting(
   requestedCwd: string,
   meetingId: string,
@@ -421,6 +448,10 @@ export async function deleteGroupMeeting(
 ): Promise<void> {
   const meeting = await readGroupMeeting(requestedCwd, meetingId, agentDir);
   if (!meeting) throw new GroupMeetingError("Meeting not found", "meeting_not_found");
+  const released = await shutdownMeetingMemberSessions(meeting, true);
+  if (released > 0) {
+    console.info(`[group-meeting] deleted meeting releases ${released} resident member session(s)`);
+  }
   await unlink(join(meetingDirectory(meeting.cwd, agentDir), `${meeting.meetingId}.workflow.json`))
     .catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") throw error;
@@ -600,6 +631,17 @@ export async function createGroupMeetingFromRoster(
 ): Promise<GroupMeeting> {
   const createSession = dependencies.createSession ?? createNewAgentSession;
   const agentDir = dependencies.agentDir ?? getAgentDir();
+  // Reclaim idle member sessions of earlier meetings in this project before
+  // spinning up a fresh six. This prevents repeated recreation from stacking
+  // resident sessions (each previous generation lingers until the generic idle
+  // eviction). Busy sessions are left alone so in-flight rounds are not aborted.
+  const previous = await listGroupMeetings(cwd, agentDir);
+  for (const old of previous) {
+    const released = await shutdownMeetingMemberSessions(old, false);
+    if (released > 0) {
+      console.info(`[group-meeting] creating ${roster.length}-member meeting releases ${released} session(s) from ${old.meetingId}`);
+    }
+  }
   const projectRoot = dependencies.projectRoot ?? cwd;
   const meetingId = randomUUID();
   const createdAt = new Date().toISOString();
