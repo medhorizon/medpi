@@ -190,6 +190,24 @@ export class AgentSessionWrapper {
     return this._alive && (this.promptRunning || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning);
   }
 
+  /**
+   * True when the session still has a running prompt, a queued prompt, or
+   * queued steering/follow-up instructions that would be lost if the session
+   * were disposed. Used as the eviction guard for progressive memory reclamation.
+   */
+  hasPendingActivity(): boolean {
+    if (!this._alive) return false;
+    try {
+      return this.isRunning()
+        || this.inner.pendingMessageCount > 0
+        || this.inner.getSteeringMessages().length > 0
+        || this.inner.getFollowUpMessages().length > 0;
+    } catch {
+      // Unable to introspect (e.g. inner partially disposed): not safe to evict.
+      return true;
+    }
+  }
+
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       if (event.type === "agent_end") {
@@ -1147,6 +1165,31 @@ export async function destroyRpcSessionsForCwd(cwd: string): Promise<number> {
   );
   await Promise.all(sessions.map((session) => session.shutdown()));
   return sessions.length;
+}
+
+export interface ReclaimSessionTarget {
+  sessionId: string | null;
+  /** Protected roles (e.g. the meeting coordinator) stay resident. */
+  keepResident?: boolean;
+}
+
+/**
+ * Progressively dispose meeting member sessions that are idle with no queued
+ * instructions, so a finished member does not stay resident while others still
+ * work. Every evicted session is lazily re-hydrated from its persisted file on
+ * the next delivery/settings path, so eviction is safe.
+ */
+export async function reclaimIdleRpcSessions(targets: readonly ReclaimSessionTarget[]): Promise<number> {
+  let reclaimed = 0;
+  for (const target of targets) {
+    if (!target.sessionId || target.keepResident) continue;
+    const session = getRpcSession(target.sessionId);
+    if (!session?.isAlive()) continue;
+    if (session.hasPendingActivity()) continue;
+    await session.shutdown().catch(() => {});
+    reclaimed += 1;
+  }
+  return reclaimed;
 }
 
 export function getRunningRpcSessionIds(): string[] {

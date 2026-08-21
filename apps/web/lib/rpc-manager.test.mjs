@@ -4,7 +4,7 @@ import test from "node:test";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url);
-const { AgentSessionWrapper, withExtensionTools } = await jiti.import("./rpc-manager.ts");
+const { AgentSessionWrapper, reclaimIdleRpcSessions, withExtensionTools } = await jiti.import("./rpc-manager.ts");
 
 test("RPC session startup preloads extension-registered providers before restoring models", async () => {
   const source = await readFile(new URL("./rpc-manager.ts", import.meta.url), "utf8");
@@ -202,4 +202,61 @@ test("fixed meeting role prompts survive tool changes without duplication", () =
   assert.match(state.systemPrompt, /Base system prompt/);
   assert.equal((state.systemPrompt.match(/<medpi_virtual_biomed_lab_role>/g) ?? []).length, 1);
   assert.match(state.systemPrompt, /Authoritative meeting role: phd-1/);
+});
+
+test("hasPendingActivity is defensive when the inner is partially constructed", () => {
+  const wrapper = new AgentSessionWrapper({
+    getAllTools: () => [],
+    setActiveToolsByName: () => {},
+    agent: {},
+  });
+  // Missing inner.getSteeringMessages/getFollowUpMessages -> treated as pending.
+  assert.equal(wrapper.hasPendingActivity(), true);
+});
+
+test("reclaimIdleRpcSessions releases only idle, instruction-free, unprotected sessions", async () => {
+  const shadow = new Map();
+  const make = (alive, running, pending, shutdownCalls = { n: 0 }, aliveFlag = { v: alive }) => ({
+    session: {
+      get alive() { return aliveFlag.v; },
+      isAlive: () => aliveFlag.v,
+      isRunning: () => running,
+      hasPendingActivity: () => pending,
+      shutdown: async () => { shutdownCalls.n += 1; aliveFlag.v = false; },
+    },
+    shutdownCalls,
+  });
+
+  const idle = make(true, false, false);            // safe -> reclaimed
+  const busy = make(true, true, true);              // running -> kept
+  const queued = make(true, false, true);           // has queued instruction -> kept
+  const protectedPi = make(true, false, false);     // coordinator -> kept (keepResident)
+  const gone = make(false, false, false);           // already inactive -> skipped
+
+  shadow.set("idle", idle.session);
+  shadow.set("busy", busy.session);
+  shadow.set("queued", queued.session);
+  shadow.set("pi", protectedPi.session);
+  shadow.set("gone", gone.session);
+
+  const previous = globalThis.__piSessions;
+  globalThis.__piSessions = shadow;
+  try {
+    const reclaimed = await reclaimIdleRpcSessions([
+      { sessionId: "idle" },
+      { sessionId: "busy" },
+      { sessionId: "queued" },
+      { sessionId: "pi", keepResident: true },
+      { sessionId: "gone" },
+      { sessionId: null },
+    ]);
+    assert.equal(reclaimed, 1);
+  } finally {
+    globalThis.__piSessions = previous;
+  }
+  assert.equal(idle.shutdownCalls.n, 1);
+  assert.equal(busy.shutdownCalls.n, 0);
+  assert.equal(queued.shutdownCalls.n, 0);
+  assert.equal(protectedPi.shutdownCalls.n, 0);
+  assert.equal(gone.shutdownCalls.n, 0);
 });

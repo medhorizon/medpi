@@ -16,7 +16,7 @@ import {
   type GroupMeetingMember,
   type GroupMeetingRole,
 } from "./group-meeting";
-import { getRpcSession, startRpcSession } from "./rpc-manager";
+import { getRpcSession, reclaimIdleRpcSessions, startRpcSession } from "./rpc-manager";
 import { resolveSessionPath } from "./session-reader";
 
 const SENIOR_ROLES = new Set<GroupMeetingRole>(["pi", "phd-1", "phd-2", "master-1", "master-2"]);
@@ -272,6 +272,17 @@ export async function sendLabMessage(
         delivery.error = error instanceof Error ? error.message : String(error);
       }
       await persistAudit(audit, agentDir);
+    }
+    // Progressive in-meeting reclamation: after a round of deliveries, free
+    // members that finished their turn and have no queued instructions. The
+    // coordinator and members still working are untouched by the guard, and
+    // evicted members re-hydrate from disk on the next delivery.
+    if (record.deliveries.length > 0) {
+      void reclaimIdleRpcSessions(
+        meeting.members.map((member) => ({ sessionId: member.sessionId, keepResident: member.role === "pi" })),
+      ).catch((error: unknown) => {
+        console.error("[group-meeting] progressive memory sweep failed:", error instanceof Error ? error.message : String(error));
+      });
     }
     return receipt(record);
   });
